@@ -16,3 +16,7 @@ __pycache__/
 fastsurfer.egg-info
 uv.lock
 /doc/api/generated/
+
+# Test artifacts
+junit-results.xml
+.pytest_cache/
