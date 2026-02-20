@@ -1,0 +1,138 @@
+# Copyright 2019 Image Analysis Lab, German Center for Neurodegenerative Diseases (DZNE), Bonn
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Dependency injection container using the injector framework."""
+
+from typing import Optional
+
+import yacs.config
+from injector import Injector, Module, provider, singleton
+
+from di.config_loader import ConfigLoader, FLConfigLoader
+from di.factories import (
+    DataLoaderFactory,
+    LossFunctionFactory,
+    ModelFactory
+)
+from di.federated_factories import FederatedBackendFactory
+from fl import FederatedClientAPI
+from fl.backends import FederatedBackend
+
+
+class FastSurferModule(Module):
+    """
+    Dependency injection module for FastSurfer components.
+
+    This module configures the bindings for dependency injection,
+    defining how components should be created and their lifecycles.
+    """
+
+    @singleton
+    @provider
+    def provide_config_loader(self) -> ConfigLoader:
+        """
+        Provide a singleton ConfigLoader instance.
+
+        Returns
+        -------
+        ConfigLoader
+            The configuration loader instance.
+        """
+        return ConfigLoader()
+    
+
+    @provider
+    def provide_model_factory(self, config_loader: ConfigLoader) -> ModelFactory:
+        """
+        Provide a ModelFactory instance.
+
+        Returns
+        -------
+        ModelFactory
+            The model factory instance.
+        """
+        return ModelFactory(cfg=config_loader.load_config())
+
+    @provider
+    def provide_loss_function_factory(self, config_loader: ConfigLoader) -> LossFunctionFactory:
+        """
+        Provide a LossFunctionFactory instance.
+
+        Returns
+        -------
+        LossFunctionFactory
+            The loss function factory instance.
+        """
+        return LossFunctionFactory(cfg=config_loader.load_config())
+
+    @provider
+    def provide_dataloader_factory(self, config_loader: ConfigLoader) -> DataLoaderFactory:
+        """
+        Provide a DataLoaderFactory instance.
+
+        Returns
+        -------
+        DataLoaderFactory
+            The data loader factory instance.
+        """
+        return DataLoaderFactory(cfg=config_loader.load_config())
+
+     
+    @provider
+    def provide_federated_backend_factory(
+        self, config_loader: ConfigLoader, fl_config_loader: FLConfigLoader) -> FederatedBackendFactory:
+        """
+        Provide a FederatedBackendFactory instance.
+
+        Returns
+        -------
+        FederatedBackendFactory
+            The federated backend factory instance.
+        """
+        return FederatedBackendFactory(config_loader=config_loader, fl_config_loader=fl_config_loader)
+    
+    @provider
+    def provide_federated_backend(
+        self, 
+        backend_factory: FederatedBackendFactory) -> FederatedBackend:
+        return backend_factory.resolve_backend()
+
+    @provider
+    def provide_federated_client(
+        self, 
+        federated_learning_config: yacs.config.CfgNode,
+        backend: FederatedBackend) -> FederatedClientAPI:
+        return FederatedClientAPI(federated_learning_config, backend)
+
+
+def create_injector() -> Injector:
+    """
+    Create and configure a dependency injector for FastSurfer.
+
+    Parameters
+    ----------
+    cfg : yacs.config.CfgNode, optional
+        Configuration to use.
+
+    Returns
+    -------
+    Injector
+        Configured dependency injector.
+
+    Examples
+    --------
+    >>> injector = create_injector(cfg)
+    >>> model_factory = injector.get(ModelFactory)
+    """
+    return Injector([FastSurferModule()])

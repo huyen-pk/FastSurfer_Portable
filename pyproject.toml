@@ -34,6 +34,7 @@ classifiers = [
 ]
 dependencies = [
     'h5py>=3.7',
+    'injector>=0.20.0',
     'lapy>=1.5.0',
     'matplotlib>=3.7.1',
     'meshpy>=2025.1.1', # needed for FastSurfer-CC
