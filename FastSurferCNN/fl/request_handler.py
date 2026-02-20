@@ -80,7 +80,7 @@ def handle_train_request(msg: Message, context: Context) -> Message:
     cfg, model_name, plane = unpack_server_config(msg.content["config"])
     trainer = injector.get(FastSurferCNN_FL_Trainer)
     # Start training loop
-    last_loss, metrics, num_examples, model_state = trainer.train()
+    last_loss, metrics, num_examples, model_state = trainer.fit()
     metric_records: dict[str, float] = {
         f"train_loss_{model_name}_{plane}": float(last_loss),
         f"num_examples_{model_name}_{plane}": float(len(num_examples)),

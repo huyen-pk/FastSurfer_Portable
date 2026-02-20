@@ -48,7 +48,7 @@ class FastSurferCNN_FL_Trainer(TrainerBase):
         self.__federated_client = federated_client
 
     
-    def train(self) -> Tuple[float, Dict[str, float], int, Dict[str, torch.Tensor]]:
+    def fit(self) -> Tuple[float, Dict[str, float], int, Dict[str, torch.Tensor]]:
         """
         Transfer the model to devices, create a tensor board summary writer and then perform the training loop.
         """

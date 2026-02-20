@@ -35,7 +35,7 @@ from FastSurferCNN.utils import logging
 logger = logging.getLogger(__name__)
 
 
-class Inference:
+class InferenceONNX:
     """Model evaluation class to run inference using FastSurferCNN.
 
     Attributes
@@ -103,7 +103,7 @@ class Inference:
         # Set random seed from configs.
         np.random.seed(cfg.RNG_SEED)
         torch.manual_seed(cfg.RNG_SEED)
-        self.cfg = cfg
+        self.set_cfg(cfg)
 
         # Switch on denormal flushing for faster CPU processing
         # seems to have less of an effect on VINN than old CNN
@@ -119,10 +119,8 @@ class Inference:
         )
 
         # Initial model setup
-        self.model = None
-        self._model_not_init = None
-        self.setup_model(cfg, device=self.default_device)
         self.model_name = self.cfg.MODEL.MODEL_NAME
+        self.setup_model(cfg, device=self.default_device)
 
         self.alpha = {"sagittal": 0.2}
         self.permute_order = {
@@ -131,19 +129,6 @@ class Inference:
             "sagittal": (0, 3, 2, 1),
         }
         self.lut = lut
-
-        # Initial checkpoint loading
-        if ckpt:
-            # this also moves the model to the para
-            self.load_checkpoint(ckpt)
-
-        # # Load the ONNX model and create an inference session
-        # import onnxruntime as ort
-        # # Providers: Use ['CUDAExecutionProvider', 'CPUExecutionProvider'] for GPU
-        # model_path = os.path.join(os.path.dirname(__file__), "FastSurferVINN.onnx")
-        # session = ort.InferenceSession(model_path, providers=['CPUExecutionProvider'])
-        # self.model = session
-        # self.device = None
 
     def setup_model(self, cfg=None, device: torch.device = None):
         """
@@ -156,14 +141,15 @@ class Inference:
         device : torch.device
             Device specification for distributed computation usage. (Default value = None).
         """
-        if cfg is not None:
-            self.cfg = cfg
         if device is None:
-            device = self.default_device
+            self.device = self.default_device
 
-        # Set up model
-        self._model_not_init = build_model(self.cfg)  # ~ model = FastSurferCNN(params_network)
-        self._model_not_init.to(device)
+        # Load the ONNX model and create an inference session
+        import onnxruntime as ort
+        # Providers: Use ['CUDAExecutionProvider', 'CPUExecutionProvider'] for GPU
+        model_name = f"{self.model_name}_{self.cfg.DATA.PLANE.capitalize()}.onnx"
+        model_path = os.path.join(self.cfg.ONNX_FOLDER, model_name)
+        self.model  = ort.InferenceSession(model_path)
         
     def set_cfg(self, cfg: yacs.config.CfgNode):
         """
@@ -190,41 +176,6 @@ class Inference:
         _device = self.default_device if device is None else device
         self.device = _device
         self.model.to(device=_device)
-
-    def load_checkpoint(self, ckpt: str | os.PathLike):
-        """
-        Load the checkpoint and set device and model.
-
-        Parameters
-        ----------
-        ckpt : str, os.PathLike
-            String or os.PathLike object containing the name to the checkpoint file.
-        """
-        logger.info(f"Loading checkpoint {ckpt}")
-
-        self.model = self._model_not_init
-        # If device is None, the model has never been loaded (still in random initial configuration)
-        if self.device is None:
-            self.device = self.default_device
-        load_device = self.device
-
-        # workaround for mps (directly loading to map_location=mps results in zeros)
-        if self.device.type == "mps":
-            load_device = "cpu"
-        # make sure the model is, where it is supposed to be
-        self.model.to(load_device)
-
-        # WARNING: weights_only=False can cause unsafe code execution, but here the
-        # checkpoint can be considered to be from a safe source
-        model_state = torch.load(ckpt, map_location=load_device, weights_only=False)
-        self.model.load_state_dict(model_state["model_state"])
-
-        # workaround for mps (move the model back to mps)
-        if self.device.type == "mps":
-            self.model.to(self.device)
-
-        if self.model_parallel:
-            self.model = torch.nn.DataParallel(self.model)
 
     def get_modelname(self) -> str:
         """
@@ -356,14 +307,8 @@ class Inference:
                     log_batch_idx = batch_idx
                     # move data to the model device
                     images, scale_factors = batch["image"].to(self.device), batch["scale_factor"].to(self.device)
-
                     # predict the current batch, outputs logits
-                    # pred = self.model(images, scale_factors, out_scale)
-                    import onnxruntime as ort
-                    # 1. Load the ONNX model and create an inference session
-                    # Providers: Use ['CUDAExecutionProvider', 'CPUExecutionProvider'] for GPU
-                    model_name = f"FastSurferVINN_{plane.capitalize()}.onnx"
-                    session = ort.InferenceSession(model_name, providers=['CPUExecutionProvider'])
+                    session = self.model
                     input_data = {
                         "x": images.detach().cpu().numpy(),
                         "scale_factor": scale_factors.detach().cpu().numpy(),
@@ -464,75 +409,3 @@ class Inference:
         )
 
         return out
-
-    def convert2onnx(
-        self,
-        model: torch.nn.Module,
-        orig_data: npt.NDArray,
-        orig_zoom: npt.NDArray,
-        batch_size: int | None = None,
-    ) -> None:
-        """
-        Convert the model on the data (T1) from orig_data and
-        img_filename (for messages only) with scale factors orig_zoom.
-
-        Parameters
-        ----------
-        orig_data : npt.NDArray
-            Original image data.
-        orig_zoom : npt.NDArray
-            Original zoom.
-        out_res : Optional[int]
-            Output resolution (Default value = None).
-        batch_size : int, optional
-            Batch size.
-        """
-        # Set up DataLoader
-        test_dataset = MultiScaleOrigDataThickSlices(
-            orig_data,
-            orig_zoom,
-            self.cfg,
-            transforms=transforms.Compose([ToTensorTest()]),
-        )
-
-        test_data_loader = DataLoader(
-            dataset=test_dataset,
-            shuffle=False,
-            batch_size=self.cfg.TEST.BATCH_SIZE if batch_size is None else batch_size,
-        )
-
-        images = next(iter(test_data_loader))
-        inputs, scale_factors = images["image"].to(self.device), images["scale_factor"].to(self.device)
-
-        # Define symbolic dimensions
-        from torch.export import Dim
-        batch = Dim("batch")
-        height = Dim("height")
-        width = Dim("width")
-
-        # Create the dynamic_shapes object
-        dynamic_shapes = {
-            "x": {0: batch, 2: height, 3: width},
-            "scale_factor": {0: batch},
-        }
-        from torch.export import draft_export
-        exported_program = draft_export(
-            model, # need pytorch model
-            args=(inputs, scale_factors), 
-            dynamic_shapes=dynamic_shapes,
-            strict=False
-        )
-        model_name = f"FastSurferVINN_{self.cfg.DATA.PLANE.capitalize()}.onnx"
-        # Export to ONNX
-        torch.onnx.export(
-            exported_program, 
-            (inputs, scale_factors),
-            model_name,
-            export_params=True,        # Store the trained parameter weights inside the model file
-            opset_version=18,          # Standard opset for broad compatibility
-            do_constant_folding=True,  # Optimization
-        )
-
-        logger.info(
-            f"Model plane {self.cfg.DATA.PLANE.capitalize()} converted to {model_name}"
-        )

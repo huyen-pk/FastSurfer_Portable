@@ -232,7 +232,7 @@ _C.RNG_SEED = 1
 
 _C.SUMMARY_PATH = "FastSurferVINN/summary/FastSurferVINN_coronal"
 _C.CONFIG_LOG_PATH = "FastSurferVINN/config/FastSurferVINN_coronal"
-
+_C.ONNX_FOLDER = "./onnx"
 
 def get_cfg_defaults():
     """Get a yacs CfgNode object with default values for my_project."""

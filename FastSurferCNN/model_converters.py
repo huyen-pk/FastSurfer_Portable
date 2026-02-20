@@ -12,16 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""
-This is the FastSurfer/run_prediction.py script, the backbone for whole brain segmentation.
-
-Usage:
-
-See Also
---------
-:doc:`/scripts/fastsurfercnn`
-`run_prediction.py --help`
-"""
 
 # IMPORTS
 import argparse
@@ -60,10 +50,10 @@ LOGGER = logging.getLogger(__name__)
 class RunModelOnDataAndConvert:
     """
     Run the model prediction on given data and convert to different formats.
+    Adapted from run_prediction.py.
 
     Attributes
     ----------
-    
 
     Methods
     -------

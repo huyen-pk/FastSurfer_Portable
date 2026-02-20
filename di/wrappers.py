@@ -5,7 +5,7 @@ from fl.api import FederatedClientAPI
 
 class TrainerBase(ABC):
     @abstractmethod
-    def train(self, *args, **kwargs) -> tuple[float, dict[str, float], int, dict[str, Any]]:
+    def fit(self, *args, **kwargs) -> tuple[float, dict[str, float], int, dict[str, Any]]:
         """
         Abstract method to perform training using the provided trainer.
 
