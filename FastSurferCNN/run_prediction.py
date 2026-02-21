@@ -41,6 +41,7 @@ import FastSurferCNN.reduce_to_aseg as rta
 from FastSurferCNN.data_loader import data_utils as du
 from FastSurferCNN.data_loader.conform import conform, is_conform, orientation_to_ornts, to_target_orientation
 from FastSurferCNN.inference import Inference
+from FastSurferCNN.prediction_postprocessing import init_pred_prob, postprocess_pred
 from FastSurferCNN.quick_qc import check_volume
 from FastSurferCNN.utils import PLANES, Plane, logging, nibabelImage, parser_defaults
 from FastSurferCNN.utils.arg_types import OrientationType, VoxSizeOption
@@ -381,13 +382,8 @@ class RunModelOnData:
         np.ndarray
             Predicted classes.
         """
-        kwargs = {
-            "device": self.viewagg_device,
-            "dtype": torch.float16,
-            "requires_grad": False,
-        }
-
-        if not np.allclose(_zoom := np.asarray(zoom), np.mean(zoom), atol=1e-4, rtol=1e-3):
+        _zoom = np.asarray(zoom)
+        if not np.allclose(_zoom, np.mean(_zoom), atol=1e-4, rtol=1e-3):
             msg = "FastSurfer support for anisotropic images is experimental, we detected the following voxel sizes"
             LOGGER.warning(f"{msg}: {np.round(_zoom, decimals=4).tolist()}!")
 
@@ -396,26 +392,18 @@ class RunModelOnData:
         _ornt_transform, _ = orientation_to_ornts(affine, target_orientation="LIA")
         _zoom = _zoom[_ornt_transform[:, 0]]
 
-        pred_prob = torch.zeros(shape, **kwargs)
+        # Initialize prediction probability tensor
+        pred_prob = init_pred_prob(shape, device=self.viewagg_device)
 
-        # inference and view aggregation
+        # Core inference: run each plane model and aggregate views
         for plane, model in self.models.items():
             LOGGER.info(f"Run {plane} prediction")
             self.set_model(plane)
             # pred_prob is updated inplace to conserve memory
             pred_prob = model.run(pred_prob, image_name, orig_in_lia, _zoom, out=pred_prob)
 
-        # Get hard predictions
-        pred_classes = torch.argmax(pred_prob, 3)
-        del pred_prob
-        # reorder from lia to native
-        pred_classes = back_to_native(pred_classes)
-        # map to freesurfer label space
-        pred_classes = du.map_label2aparc_aseg(pred_classes, self.labels)
-        # return numpy array
-        # TODO: split_cortex_labels requires a numpy ndarray input, maybe we can also use Mapper here
-        pred_classes = du.split_cortex_labels(pred_classes.cpu().numpy())
-        return pred_classes
+        # Post-process predictions
+        return postprocess_pred(pred_prob, back_to_native, self.labels)
 
     def save_img(
         self,
