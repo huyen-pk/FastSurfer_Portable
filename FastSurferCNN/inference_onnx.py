@@ -29,13 +29,14 @@ from torchvision import transforms
 from FastSurferCNN.data_loader.augmentation import ToTensorTest
 from FastSurferCNN.data_loader.data_utils import map_prediction_sagittal2full
 from FastSurferCNN.data_loader.dataset import MultiScaleOrigDataThickSlices
+from FastSurferCNN.inference import Inference
 from FastSurferCNN.models.networks import build_model
 from FastSurferCNN.utils import logging
 
 logger = logging.getLogger(__name__)
 
 
-class InferenceONNX:
+class InferenceONNX(Inference):
     """Model evaluation class to run inference using FastSurferCNN.
 
     Attributes
@@ -78,11 +79,12 @@ class InferenceONNX:
     permute_order: dict[str, tuple[int, int, int, int]]
     device: torch.device | None
     default_device: torch.device
+    ONNX_FOLDER: str
 
     def __init__(
         self,
         cfg: yacs.config.CfgNode,
-        device: torch.device,
+        device: torch.device = None,
         ckpt: str = "",
         lut: None | str | np.ndarray | DataFrame = None,
     ):
@@ -120,6 +122,7 @@ class InferenceONNX:
 
         # Initial model setup
         self.model_name = self.cfg.MODEL.MODEL_NAME
+        self.ONNX_FOLDER = self.cfg.ONNX_FOLDER
         self.setup_model(cfg, device=self.default_device)
 
         self.alpha = {"sagittal": 0.2}
@@ -148,7 +151,7 @@ class InferenceONNX:
         import onnxruntime as ort
         # Providers: Use ['CUDAExecutionProvider', 'CPUExecutionProvider'] for GPU
         model_name = f"{self.model_name}_{self.cfg.DATA.PLANE.capitalize()}.onnx"
-        model_path = os.path.join(self.cfg.ONNX_FOLDER, model_name)
+        model_path = os.path.join(self.ONNX_FOLDER, model_name)
         self.model  = ort.InferenceSession(model_path)
         
     def set_cfg(self, cfg: yacs.config.CfgNode):
@@ -161,6 +164,7 @@ class InferenceONNX:
             Configuration node.
         """
         self.cfg = cfg
+        self.ONNX_FOLDER = cfg.ONNX_FOLDER
 
     def to(self, device: torch.device | None = None):
         """

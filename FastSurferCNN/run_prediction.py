@@ -50,6 +50,8 @@ from FastSurferCNN.utils.common import SubjectDirectory, SubjectList, find_devic
 from FastSurferCNN.utils.load_config import load_config
 from FastSurferCNN.utils.parallel import SerialExecutor, pipeline
 from FastSurferCNN.utils.parser_defaults import SubjectDirectoryConfig
+from di.container import create_injector
+from di.factories import InferenceEngineFactory
 
 LOGGER = logging.getLogger(__name__)
 
@@ -181,6 +183,8 @@ class RunModelOnData:
     viewagg_device: torch.device
     orientation: OrientationType
     _pool: Executor
+    injector = create_injector()
+    inference_engine_factory = injector.get(InferenceEngineFactory)
 
     def __init__(
             self,
@@ -267,7 +271,8 @@ class RunModelOnData:
         self.models = {}
         for plane, view in self.view_ops.items():
             if all(view[key] is not None for key in ("cfg", "ckpt")):
-                self.models[plane] = Inference(view["cfg"], ckpt=view["ckpt"], device=self.device, lut=self.lut)
+                # self.models[plane] = Inference(view["cfg"], ckpt=view["ckpt"], device=self.device, lut=self.lut)
+                self.models[plane] = self.inference_engine_factory.create_inference_engine(view["cfg"])
 
         try:
             self.vox_size = _vox_size(vox_size)

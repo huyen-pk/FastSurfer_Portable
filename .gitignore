@@ -2,8 +2,11 @@
 /tools/Docker/BUILD.info
 /tools/Docker/custom-ssl.crt
 /.idea/**
+/.vscode/
+**/.vscode/
 /rough_work/**
 /doc-build/**
+**/node_modules/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
@@ -20,3 +23,11 @@ uv.lock
 # Test artifacts
 junit-results.xml
 .pytest_cache/
+
+# Desktop app build artifacts
+/app/backend/build/
+/app/backend/dist/
+/app/gui/simple-viewer/dist/
+/app/gui/desktop/dist/
+/app/gui/desktop/backend/
+/app/gui/desktop/src-tauri/target/

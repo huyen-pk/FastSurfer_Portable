@@ -19,9 +19,11 @@ from typing import Optional
 import yacs.config
 from injector import Injector, Module, provider, singleton
 
+from FastSurferCNN.inference import Inference as FastSurferCNNInference
 from di.config_loader import ConfigLoader, FLConfigLoader
 from di.factories import (
     DataLoaderFactory,
+    InferenceEngineFactory,
     LossFunctionFactory,
     ModelFactory
 )
@@ -36,6 +38,7 @@ class FastSurferModule(Module):
 
     This module configures the bindings for dependency injection,
     defining how components should be created and their lifecycles.
+    
     """
 
     @singleton
@@ -51,6 +54,18 @@ class FastSurferModule(Module):
         """
         return ConfigLoader()
     
+    @provider
+    def provide_inference_engine_factory(self) -> InferenceEngineFactory:
+        """
+        Provide an InferenceEngineFactory instance.
+
+        Returns
+        -------
+        InferenceEngineFactory
+            The inference engine factory instance.
+
+        """
+        return InferenceEngineFactory()
 
     @provider
     def provide_model_factory(self, config_loader: ConfigLoader) -> ModelFactory:

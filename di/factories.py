@@ -20,6 +20,7 @@ import torch
 import yacs.config
 from torch.utils.data import DataLoader
 
+from FastSurferCNN.inference import Inference
 from di.wrappers import FastSurferCNN_FL_Trainer, TrainerBase
 
 from FastSurferCNN.data_loader import loader
@@ -66,7 +67,37 @@ class ModelFactory:
         """
         return networks.build_model(self.__cfg)
 
+class InferenceEngineFactory:
+    """
+    Factory for creating inference engine instances.
 
+    This factory encapsulates inference engine creation logic and allows
+    for dependency injection of inference engine instances.
+
+    Methods
+    -------
+    create_inference_engine(cfg: yacs.config.CfgNode) -> Optional[InferenceONNX]
+        Creates an inference engine instance based on the configuration.
+    """
+
+    def create_inference_engine(self, cfg: yacs.config.CfgNode) -> torch.nn.Module | None:
+        """
+        Create an inference engine instance based on configuration.
+
+        Parameters
+        ----------
+        cfg : yacs.config.CfgNode
+            The configuration node to retrieve settings from.
+
+        Returns
+        -------
+        torch.nn.Module | None
+             The inference engine instance if enabled, otherwise None.
+        """
+        if cfg.ONNX_FOLDER is not None:
+            from FastSurferCNN.inference_onnx import InferenceONNX
+            return InferenceONNX(cfg=cfg)
+        return Inference(cfg=cfg)
 class LossFunctionFactory:
     """
     Factory for creating loss functions.
