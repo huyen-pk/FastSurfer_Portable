@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import base64
 import importlib
+import os
 import shutil
+import sys
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -17,12 +19,92 @@ def _get_default_ckpts_and_cfgs() -> tuple[dict[str, Any], dict[str, Any]]:
     return ckpts, cfgs
 
 
+def _normalize_path_map(paths: dict[str, Any]) -> dict[str, Any]:
+    normalized: dict[str, Any] = {}
+    for key, value in paths.items():
+        if value is None:
+            normalized[key] = value
+            continue
+
+        value_path = Path(str(value))
+        if value_path.is_absolute() and value_path.exists():
+            normalized[key] = str(value_path)
+            continue
+
+        resolved = _resolve_resource_path(str(value))
+        normalized[key] = str(resolved)
+
+    return normalized
+
+
+def _ensure_onnx_model_aliases() -> None:
+    onnx_dir = Path("onnx")
+    if not onnx_dir.exists():
+        return
+
+    alias_pairs = [
+        ("FastSurferVINN_Axial.onnx", "FastSurferVINN_axial.onnx"),
+        ("FastSurferVINN_Coronal.onnx", "FastSurferVINN_coronal.onnx"),
+        ("FastSurferVINN_Sagittal.onnx", "FastSurferVINN_sagittal.onnx"),
+    ]
+
+    for expected_name, existing_name in alias_pairs:
+        expected_path = onnx_dir / expected_name
+        existing_path = onnx_dir / existing_name
+        if expected_path.exists() or not existing_path.exists():
+            continue
+
+        try:
+            expected_path.symlink_to(existing_path.name)
+        except OSError:
+            shutil.copy2(existing_path, expected_path)
+
+
+def _resource_base_dirs() -> list[Path]:
+    bases: list[Path] = []
+
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        bases.append(Path(str(meipass)))
+
+    if getattr(sys, "frozen", False):
+        bases.append(Path(sys.executable).resolve().parent)
+
+    bases.append(Path(__file__).resolve().parents[2])
+    bases.append(Path.cwd())
+
+    unique: list[Path] = []
+    seen: set[str] = set()
+    for base in bases:
+        key = str(base)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(base)
+
+    return unique
+
+
+def _resolve_resource_path(relative_path: str) -> Path:
+    for base in _resource_base_dirs():
+        candidate = base / relative_path
+        if candidate.exists():
+            return candidate
+    return Path(relative_path)
+
+
 class FastSurferInferenceService:
     def __init__(self):
-        self.ckpts, self.cfgs = _get_default_ckpts_and_cfgs()
-        self.lut_path = str(Path("FastSurferCNN") / "config" / "FreeSurferColorLUT.txt")
+        ckpts, cfgs = _get_default_ckpts_and_cfgs()
+        self.ckpts = _normalize_path_map(ckpts)
+        self.cfgs = _normalize_path_map(cfgs)
+        self.lut_path = str(
+            _resolve_resource_path("FastSurferCNN/config/FreeSurferColorLUT.txt")
+        )
 
     def run_prediction(self, input_path: Path, output_dir: Path) -> tuple[int | str, Path]:
+        _ensure_onnx_model_aliases()
+        os.environ.setdefault("FASTSURFER_DISABLE_ONNX", "1")
         run_prediction_module = importlib.import_module("FastSurferCNN.run_prediction")
         run_main = getattr(run_prediction_module, "main", None)
 
@@ -47,6 +129,7 @@ class FastSurferInferenceService:
             "cfg_sag": str(self.cfgs.get("sagittal")),
             "cfg_cor": str(self.cfgs.get("coronal")),
             "async_io": False,
+            "threads": 1,
             "batch_size": 1,
             "device": "cpu",
             "viewagg_device": "cpu",

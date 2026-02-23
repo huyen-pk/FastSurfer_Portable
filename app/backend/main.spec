@@ -9,11 +9,28 @@ FASTSURFER_HIDDENIMPORTS = collect_submodules('FastSurferCNN')
 FASTSURFER_DATAS = collect_data_files('FastSurferCNN')
 
 
+def collect_project_data_tree(source_dir: Path, dest_root: str):
+    datas = []
+    if not source_dir.exists():
+        return datas
+
+    for path in source_dir.rglob('*'):
+        if path.is_file():
+            relative_parent = path.parent.relative_to(source_dir)
+            dest_dir = Path(dest_root) / relative_parent
+            datas.append((str(path), str(dest_dir)))
+
+    return datas
+
+
+PROJECT_DATAS = collect_project_data_tree(PROJECT_ROOT / 'checkpoints', 'checkpoints')
+
+
 a = Analysis(
     ['ipc_server.py'],
     pathex=[str(PROJECT_ROOT)],
     binaries=[],
-    datas=FASTSURFER_DATAS,
+    datas=FASTSURFER_DATAS + PROJECT_DATAS,
     hiddenimports=FASTSURFER_HIDDENIMPORTS,
     hookspath=[],
     hooksconfig={},

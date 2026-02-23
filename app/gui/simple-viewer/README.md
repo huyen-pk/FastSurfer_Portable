@@ -2,6 +2,8 @@
 
 Svelte + Vite frontend for selecting medical image inputs, launching FastSurfer processing, and previewing processed outputs.
 
+Shared coding-agent playbook: [../../SKILLS.md](../../SKILLS.md)
+
 ## Development
 
 - Install dependencies: `npm install`
