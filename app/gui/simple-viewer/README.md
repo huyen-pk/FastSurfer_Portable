@@ -1,43 +1,38 @@
-# Svelte + Vite
+# FastSurfer Simple Viewer
 
-This template should help get you started developing with Svelte in Vite.
+Svelte + Vite frontend for selecting medical image inputs, launching FastSurfer processing, and previewing processed outputs.
 
-## Recommended IDE Setup
+## Development
 
-[VS Code](https://code.visualstudio.com/) + [Svelte](https://marketplace.visualstudio.com/items?itemName=svelte.svelte-vscode).
+- Install dependencies: `npm install`
+- Run dev server: `npm run dev`
+- Build production bundle: `npm run build`
+- Preview build: `npm run preview`
 
-## Need an official Svelte framework?
+## Testing
 
-Check out [SvelteKit](https://github.com/sveltejs/kit#readme), which is also powered by Vite. Deploy anywhere with its serverless-first approach and adapt to various platforms, with out of the box support for TypeScript, SCSS, and Less, and easily-added support for mdsvex, GraphQL, PostCSS, Tailwind CSS, and more.
+All testing files and generated artifacts are grouped under `testing/`.
 
-## Technical considerations
+### Folder Layout
 
-**Why use this over SvelteKit?**
+- `testing/e2e/`
+	- Playwright configs: `playwright.config.ts`, `playwright.ci.config.ts`
+	- E2E tests: `*.spec.ts`
+	- Playwright outputs: `testing/e2e/results/`
+- `testing/vitest/`
+	- Vitest config: `vitest.config.ts`
+	- Vitest setup + tests: `setup.ts`, `*.test.ts`
+	- Vitest outputs: `testing/vitest/results/`
 
-- It brings its own routing solution which might not be preferable for some users.
-- It is first and foremost a framework that just happens to use Vite under the hood, not a Vite app.
+### Commands
 
-This template contains as little as possible to get started with Vite + Svelte, while taking into account the developer experience with regards to HMR and intellisense. It demonstrates capabilities on par with the other `create-vite` templates and is a good starting point for beginners dipping their toes into a Vite + Svelte project.
+- Unit/component tests (Vitest): `npm run test`
+- Unit/component tests in watch mode: `npm run test:watch`
+- E2E tests (Playwright): `npm run test:e2e`
+- E2E tests for CI (headless): `npm run test:e2e:ci`
 
-Should you later need the extended capabilities and extensibility provided by SvelteKit, the template has been structured similarly to SvelteKit so that it is easy to migrate.
+### Notes
 
-**Why include `.vscode/extensions.json`?**
-
-Other templates indirectly recommend extensions via the README, but this file allows VS Code to prompt the user to install the recommended extension upon opening the project.
-
-**Why enable `checkJs` in the JS template?**
-
-It is likely that most cases of changing variable types in runtime are likely to be accidental, rather than deliberate. This provides advanced typechecking out of the box. Should you like to take advantage of the dynamically-typed nature of JavaScript, it is trivial to change the configuration.
-
-**Why is HMR not preserving my local component state?**
-
-HMR state preservation comes with a number of gotchas! It has been disabled by default in both `svelte-hmr` and `@sveltejs/vite-plugin-svelte` due to its often surprising behavior. You can read the details [here](https://github.com/sveltejs/svelte-hmr/tree/master/packages/svelte-hmr#preservation-of-local-state).
-
-If you have state that's important to retain within a component, consider creating an external store which would not be replaced by HMR.
-
-```js
-// store.js
-// An extremely simple external store
-import { writable } from 'svelte/store'
-export default writable(0)
-```
+- Playwright browsers can be installed with: `npx playwright install chromium`
+- Local Playwright HTML reports are written to `testing/e2e/results/playwright-report`
+- Vitest JSON report is written to `testing/vitest/results/vitest-report.json`

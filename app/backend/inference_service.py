@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import importlib
 import shutil
 import tempfile
 from pathlib import Path
@@ -22,7 +23,18 @@ class FastSurferInferenceService:
         self.lut_path = str(Path("FastSurferCNN") / "config" / "FreeSurferColorLUT.txt")
 
     def run_prediction(self, input_path: Path, output_dir: Path) -> tuple[int | str, Path]:
-        from FastSurferCNN.run_prediction import main as run_main
+        run_prediction_module = importlib.import_module("FastSurferCNN.run_prediction")
+        run_main = getattr(run_prediction_module, "main", None)
+
+        if not callable(run_main) and run_main is not None:
+            nested_main = getattr(run_main, "main", None)
+            if callable(nested_main):
+                run_main = nested_main
+
+        if not callable(run_main):
+            raise RuntimeError(
+                f"FastSurferCNN.run_prediction.main is not callable (resolved type: {type(run_main).__name__})"
+            )
 
         kwargs = {
             "orig_name": str(input_path),
@@ -57,6 +69,43 @@ class FastSurferInferenceService:
 
         return run_result, seg_files[0]
 
+    @staticmethod
+    def is_supported_image(path: Path) -> bool:
+        lower = str(path).lower()
+        return (
+            lower.endswith(".nii")
+            or lower.endswith(".nii.gz")
+            or lower.endswith(".mgz")
+            or lower.endswith(".mgh")
+        )
+
+    def collect_images_recursive(self, directory: Path) -> list[Path]:
+        resolved_directory = directory.expanduser().resolve()
+        if not resolved_directory.exists() or not resolved_directory.is_dir():
+            return []
+
+        collected: list[Path] = []
+        for entry in resolved_directory.rglob("*"):
+            if entry.is_file() and self.is_supported_image(entry):
+                collected.append(entry)
+        return collected
+
+    def resolve_input_paths(self, *, file_paths: list[str], folder_paths: list[str]) -> list[Path]:
+        resolved: list[Path] = []
+
+        for file_path in file_paths:
+            path = Path(file_path).expanduser().resolve()
+            if path.exists() and path.is_file() and self.is_supported_image(path):
+                resolved.append(path)
+
+        for folder_path in folder_paths:
+            folder = Path(folder_path).expanduser().resolve()
+            if folder.exists() and folder.is_dir():
+                resolved.extend(self.collect_images_recursive(folder))
+
+        unique_sorted = sorted({str(path): path for path in resolved}.values(), key=lambda p: str(p))
+        return unique_sorted
+
     def predict_from_path(
         self,
         input_path: str | Path,
@@ -81,6 +130,46 @@ class FastSurferInferenceService:
         if return_base64:
             result["output_base64"] = base64.b64encode(seg_path.read_bytes()).decode("utf-8")
         return result
+
+    def predict_batch_from_paths(self, *, file_paths: list[str], folder_paths: list[str]) -> dict[str, Any]:
+        requested_paths = self.resolve_input_paths(file_paths=file_paths, folder_paths=folder_paths)
+        if not requested_paths:
+            raise ValueError("No valid input image files selected (.nii, .nii.gz, .mgz, .mgh).")
+
+        results: list[dict[str, Any]] = []
+        result_directories: set[str] = set()
+        for input_path in requested_paths:
+            output_dir = Path(tempfile.mkdtemp(prefix="fastsurfer_ipc_out_"))
+            prediction = self.predict_from_path(input_path=input_path, output_dir=output_dir)
+            output_path = str(prediction["output_path"])
+            parent_dir = str(Path(output_path).parent)
+            if parent_dir:
+                result_directories.add(parent_dir)
+            results.append(
+                {
+                    "input_path": str(input_path),
+                    "output_path": output_path,
+                    "output_filename": prediction["output_filename"],
+                    "run_result": prediction["run_result"],
+                }
+            )
+
+        requested_as_str = [str(path) for path in requested_paths]
+        sorted_result_directories = sorted(result_directories)
+        if sorted_result_directories:
+            ack_message = (
+                f"Processing started for {len(requested_as_str)} path(s). "
+                f"Results directory: {', '.join(sorted_result_directories)}"
+            )
+        else:
+            ack_message = f"Processing started for {len(requested_as_str)} path(s)."
+
+        return {
+            "ack_message": ack_message,
+            "requested_paths": requested_as_str,
+            "results": results,
+            "result_directories": sorted_result_directories,
+        }
 
     def predict_from_bytes(
         self,

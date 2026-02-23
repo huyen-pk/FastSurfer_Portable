@@ -1,15 +1,16 @@
-<script>
+<script lang="ts">
   import { createEventDispatcher, onMount } from "svelte";
   import { Niivue } from "@niivue/niivue";
+  import type { InferenceResult } from "../types/inference";
 
-  export let result;
+  export let result: InferenceResult;
 
-  const dispatch = createEventDispatcher();
+  const dispatch = createEventDispatcher<{ close: undefined }>();
 
-  let canvas;
-  let nv;
+  let canvas: HTMLCanvasElement;
+  let nv: Niivue | null = null;
 
-  function toViewerUrl(path) {
+  function toViewerUrl(path: string): string {
     if (!path) return "";
     if (path.startsWith("http://") || path.startsWith("https://") || path.startsWith("file://")) {
       return path;

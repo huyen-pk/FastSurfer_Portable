@@ -45,6 +45,36 @@ class FastSurferIPCServer:
 		file_name = str(params.get("file_name") or "input.nii.gz")
 		return self.inference_service.predict_from_bytes(file_b64, file_name=file_name)
 
+	def _start_predict_batch(self, params: dict[str, Any]) -> dict[str, Any]:
+		file_paths = params.get("file_paths") or []
+		folder_paths = params.get("folder_paths") or []
+		if not isinstance(file_paths, list) or not isinstance(folder_paths, list):
+			raise ValueError("file_paths and folder_paths must be arrays")
+
+		requested_paths = self.inference_service.resolve_input_paths(
+			file_paths=[str(p) for p in file_paths],
+			folder_paths=[str(p) for p in folder_paths],
+		)
+		if not requested_paths:
+			raise ValueError("No valid input image files selected (.nii, .nii.gz, .mgz, .mgh).")
+
+		requested_as_str = [str(path) for path in requested_paths]
+		return {
+			"ack_message": f"Processing started for {len(requested_as_str)} path(s).",
+			"requested_paths": requested_as_str,
+		}
+
+	def _predict_batch(self, params: dict[str, Any]) -> dict[str, Any]:
+		file_paths = params.get("file_paths") or []
+		folder_paths = params.get("folder_paths") or []
+		if not isinstance(file_paths, list) or not isinstance(folder_paths, list):
+			raise ValueError("file_paths and folder_paths must be arrays")
+
+		return self.inference_service.predict_batch_from_paths(
+			file_paths=[str(p) for p in file_paths],
+			folder_paths=[str(p) for p in folder_paths],
+		)
+
 	def handle_request(self, request: dict[str, Any]) -> dict[str, Any]:
 		request_id = request.get("id")
 		method = request.get("method")
@@ -62,6 +92,14 @@ class FastSurferIPCServer:
 
 		if method == "predict_bytes":
 			result = self._predict_from_bytes(params)
+			return {"id": request_id, "ok": True, "result": result}
+
+		if method == "start_predict_batch":
+			result = self._start_predict_batch(params)
+			return {"id": request_id, "ok": True, "result": result}
+
+		if method == "predict_batch":
+			result = self._predict_batch(params)
 			return {"id": request_id, "ok": True, "result": result}
 
 		if method == "shutdown":

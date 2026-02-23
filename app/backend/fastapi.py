@@ -4,11 +4,17 @@ import shutil
 import tempfile
 from pathlib import Path
 import traceback
+from pydantic import BaseModel, Field
 
 from inference_service import FastSurferInferenceService
 
 app = FastAPI(title="FastSurferCNN ONNX Inference")
 inference_service = FastSurferInferenceService()
+
+
+class BatchProcessRequest(BaseModel):
+    file_paths: list[str] = Field(default_factory=list)
+    folder_paths: list[str] = Field(default_factory=list)
 
 
 
@@ -46,6 +52,36 @@ async def predict(file: UploadFile = File(...)):
 @app.get("/health")
 async def health():
     return {"status": "ok"}
+
+
+@app.post("/process/start")
+async def process_start(request: BatchProcessRequest):
+    try:
+        requested = inference_service.resolve_input_paths(
+            file_paths=request.file_paths,
+            folder_paths=request.folder_paths,
+        )
+        if not requested:
+            raise ValueError("No valid input image files selected (.nii, .nii.gz, .mgz, .mgh).")
+
+        requested_as_str = [str(path) for path in requested]
+        return {
+            "ack_message": f"Processing started for {len(requested_as_str)} path(s).",
+            "requested_paths": requested_as_str,
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.post("/process/run")
+async def process_run(request: BatchProcessRequest):
+    try:
+        return inference_service.predict_batch_from_paths(
+            file_paths=request.file_paths,
+            folder_paths=request.folder_paths,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 if __name__ == "__main__":

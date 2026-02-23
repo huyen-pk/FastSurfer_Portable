@@ -15,6 +15,15 @@ struct InferenceOutput {
     run_result: String,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProcessingRunResult {
+    ack_message: String,
+    requested_paths: Vec<String>,
+    result_directories: Vec<String>,
+    results: Vec<InferenceOutput>,
+}
+
 struct BackendProcess {
     _child: Child,
     stdin: ChildStdin,
@@ -23,28 +32,6 @@ struct BackendProcess {
 
 struct BackendState {
     process: Mutex<BackendProcess>,
-}
-
-fn is_supported_image(path: &Path) -> bool {
-    let lower = path.to_string_lossy().to_lowercase();
-    lower.ends_with(".nii")
-        || lower.ends_with(".nii.gz")
-        || lower.ends_with(".mgz")
-        || lower.ends_with(".mgh")
-}
-
-fn collect_images_recursive(dir: &Path, output: &mut Vec<PathBuf>) -> Result<(), String> {
-    let entries = fs::read_dir(dir).map_err(|e| format!("Cannot read directory {}: {e}", dir.display()))?;
-    for entry in entries {
-        let entry = entry.map_err(|e| format!("Cannot read directory entry in {}: {e}", dir.display()))?;
-        let path = entry.path();
-        if path.is_dir() {
-            collect_images_recursive(&path, output)?;
-        } else if is_supported_image(&path) {
-            output.push(path);
-        }
-    }
-    Ok(())
 }
 
 fn open_in_file_manager(path: &Path) -> Result<(), String> {
@@ -112,12 +99,20 @@ fn resolve_backend_binary_path() -> Result<PathBuf, String> {
         .parent()
         .ok_or_else(|| "Cannot resolve parent directory of executable".to_string())?;
 
+    let workspace_hint = cwd.join("app/gui/desktop/backend/main");
     let candidates = [
+        workspace_hint,
+        cwd.join("gui/desktop/backend/main"),
+        cwd.join("backend/main"),
         cwd.join("../backend/main"),
         cwd.join("../../backend/main"),
         cwd.join("../../../backend/main"),
         exe_dir.join("../backend/main"),
         exe_dir.join("../../backend/main"),
+        exe_dir.join("../../../backend/main"),
+        exe_dir.join("../../../../backend/main"),
+        exe_dir.join("../../../../../backend/main"),
+        exe_dir.join("../../../../../../backend/main"),
     ];
 
     candidates
@@ -155,7 +150,7 @@ impl BackendState {
         })
     }
 
-    fn run_ipc_predict(&self, input_path: &Path) -> Result<InferenceOutput, String> {
+    fn run_ipc_request(&self, method: &str, params: Value) -> Result<Value, String> {
         let mut process = self
             .process
             .lock()
@@ -163,10 +158,8 @@ impl BackendState {
 
         let request = json!({
             "id": 1,
-            "method": "predict",
-            "params": {
-                "input_path": input_path,
-            }
+            "method": method,
+            "params": params,
         });
 
         let line = format!("{}\n", request);
@@ -203,39 +196,142 @@ impl BackendState {
                 .and_then(|err| err.get("message"))
                 .and_then(Value::as_str)
                 .unwrap_or("Unknown backend error");
-            return Err(format!("Backend predict failed for {}: {error_msg}", input_path.display()));
+            return Err(format!("Backend {method} failed: {error_msg}"));
         }
 
-        let result = response
+        response
             .get("result")
-            .ok_or_else(|| "Missing result field in IPC response".to_string())?;
+            .cloned()
+            .ok_or_else(|| "Missing result field in IPC response".to_string())
+    }
 
-        let output_path = result
-            .get("output_path")
+    fn start_predict_batch(&self, file_paths: &[String], folder_paths: &[String]) -> Result<(String, Vec<String>), String> {
+        let result = self.run_ipc_request(
+            "start_predict_batch",
+            json!({
+                "file_paths": file_paths,
+                "folder_paths": folder_paths,
+            }),
+        )?;
+
+        let ack_message = result
+            .get("ack_message")
             .and_then(Value::as_str)
-            .ok_or_else(|| "Missing output_path in IPC result".to_string())?
+            .ok_or_else(|| "Missing ack_message in IPC response".to_string())?
             .to_string();
-        let output_filename = result
-            .get("output_filename")
+
+        let requested_paths = result
+            .get("requested_paths")
+            .and_then(Value::as_array)
+            .ok_or_else(|| "Missing requested_paths in IPC response".to_string())?
+            .iter()
+            .filter_map(Value::as_str)
+            .map(ToString::to_string)
+            .collect::<Vec<String>>();
+
+        Ok((ack_message, requested_paths))
+    }
+
+    fn predict_batch(
+        &self,
+        file_paths: &[String],
+        folder_paths: &[String],
+        fallback_ack_message: &str,
+        fallback_requested_paths: &[String],
+    ) -> Result<ProcessingRunResult, String> {
+        let result = self.run_ipc_request(
+            "predict_batch",
+            json!({
+                "file_paths": file_paths,
+                "folder_paths": folder_paths,
+            }),
+        )?;
+
+        let ack_message_from_backend = result
+            .get("ack_message")
             .and_then(Value::as_str)
-            .ok_or_else(|| "Missing output_filename in IPC result".to_string())?
+            .unwrap_or(fallback_ack_message)
             .to_string();
-        let run_result = result
-            .get("run_result")
-            .map(|v| {
-                if let Some(s) = v.as_str() {
-                    s.to_string()
-                } else {
-                    v.to_string()
-                }
+
+        let requested_paths = result
+            .get("requested_paths")
+            .and_then(Value::as_array)
+            .map(|paths| {
+                paths
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(ToString::to_string)
+                    .collect::<Vec<String>>()
             })
-            .unwrap_or_else(|| "null".to_string());
+            .unwrap_or_else(|| fallback_requested_paths.to_vec());
 
-        Ok(InferenceOutput {
-            input_path: input_path.to_string_lossy().to_string(),
-            output_path,
-            output_filename,
-            run_result,
+        let results_array = result
+            .get("results")
+            .and_then(Value::as_array)
+            .ok_or_else(|| "Missing results in IPC response".to_string())?;
+
+        let mut results = Vec::with_capacity(results_array.len());
+        for entry in results_array {
+            let input_path = entry
+                .get("input_path")
+                .and_then(Value::as_str)
+                .ok_or_else(|| "Missing input_path in IPC result".to_string())?
+                .to_string();
+
+            let output_path = entry
+                .get("output_path")
+                .and_then(Value::as_str)
+                .ok_or_else(|| "Missing output_path in IPC result".to_string())?
+                .to_string();
+
+            let output_filename = entry
+                .get("output_filename")
+                .and_then(Value::as_str)
+                .ok_or_else(|| "Missing output_filename in IPC result".to_string())?
+                .to_string();
+
+            let run_result = entry
+                .get("run_result")
+                .map(|v| {
+                    if let Some(s) = v.as_str() {
+                        s.to_string()
+                    } else {
+                        v.to_string()
+                    }
+                })
+                .unwrap_or_else(|| "null".to_string());
+
+            results.push(InferenceOutput {
+                input_path,
+                output_path,
+                output_filename,
+                run_result,
+            });
+        }
+
+        let mut result_directories: Vec<String> = results
+            .iter()
+            .filter_map(|item| Path::new(&item.output_path).parent())
+            .map(|path| path.to_string_lossy().to_string())
+            .collect();
+        result_directories.sort();
+        result_directories.dedup();
+
+        let ack_message = if result_directories.is_empty() {
+            ack_message_from_backend
+        } else {
+            format!(
+                "{} Results directory: {}",
+                ack_message_from_backend,
+                result_directories.join(", ")
+            )
+        };
+
+        Ok(ProcessingRunResult {
+            ack_message,
+            requested_paths,
+            result_directories,
+            results,
         })
     }
 }
@@ -245,37 +341,16 @@ fn run_fastsurfer_inference(
     backend: tauri::State<'_, BackendState>,
     file_paths: Vec<String>,
     folder_paths: Vec<String>,
-) -> Result<Vec<InferenceOutput>, String> {
-    let mut inputs: Vec<PathBuf> = vec![];
+) -> Result<ProcessingRunResult, String> {
+    let (start_ack_message, start_requested_paths) =
+        backend.start_predict_batch(&file_paths, &folder_paths)?;
 
-    for file in file_paths {
-        let path = PathBuf::from(file);
-        if path.exists() && path.is_file() && is_supported_image(&path) {
-            inputs.push(path);
-        }
-    }
-
-    for folder in folder_paths {
-        let path = PathBuf::from(folder);
-        if path.exists() && path.is_dir() {
-            collect_images_recursive(&path, &mut inputs)?;
-        }
-    }
-
-    if inputs.is_empty() {
-        return Err("No valid input image files selected (.nii, .nii.gz, .mgz, .mgh).".to_string());
-    }
-
-    inputs.sort();
-    inputs.dedup();
-
-    let mut outputs: Vec<InferenceOutput> = vec![];
-
-    for input in inputs {
-        outputs.push(backend.run_ipc_predict(&input)?);
-    }
-
-    Ok(outputs)
+    backend.predict_batch(
+        &file_paths,
+        &folder_paths,
+        &start_ack_message,
+        &start_requested_paths,
+    )
 }
 
 #[tauri::command]
@@ -328,7 +403,10 @@ pub fn run() {
         .manage(backend_state)
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![run_fastsurfer_inference, open_result_in_file_manager])
+        .invoke_handler(tauri::generate_handler![
+            run_fastsurfer_inference,
+            open_result_in_file_manager
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
