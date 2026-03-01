@@ -31,10 +31,24 @@ class FastSurferIPCServer:
 		else:
 			output_dir = Path(tempfile.mkdtemp(prefix="fastsurfer_ipc_out_"))
 
+		task_id = str(params.get("task_id") or "")
+
+		def progress_callback(progress: int, message: str) -> None:
+			payload: dict[str, Any] = {
+				"event": "progress",
+				"progress": max(0, min(100, int(progress))),
+				"message": str(message or "Processing MRI"),
+			}
+			if task_id:
+				payload["task_id"] = task_id
+			sys.stdout.write(json.dumps(payload) + "\n")
+			sys.stdout.flush()
+
 		return self.inference_service.predict_from_path(
 			input_path=input_path,
 			output_dir=output_dir,
 			return_base64=bool(params.get("return_base64", False)),
+			progress_callback=progress_callback,
 		)
 
 	def _predict_from_bytes(self, params: dict[str, Any]) -> dict[str, Any]:

@@ -21,3 +21,14 @@ export interface ProcessInferenceResponse {
   ack_message?: string;
   results?: RawInferenceResult[];
 }
+
+export interface InferenceProgressEvent {
+  taskId: string;
+  status: "started" | "item_progress" | "item_completed" | "completed" | "failed" | "cancelled";
+  message: string;
+  total: number;
+  completed: number;
+  progress: number;
+  currentPath?: string | null;
+  outputPath?: string | null;
+}

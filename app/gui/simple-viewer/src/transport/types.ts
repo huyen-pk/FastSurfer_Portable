@@ -1,4 +1,4 @@
-import type { ProcessInferenceResponse } from "../types/inference";
+import type { InferenceProgressEvent, ProcessInferenceResponse } from "../types/inference";
 
 export interface ProcessInferenceRequest {
   filePaths: string[];
@@ -7,5 +7,12 @@ export interface ProcessInferenceRequest {
 
 export interface Transport {
   processInference(request: ProcessInferenceRequest): Promise<ProcessInferenceResponse>;
+  processInferenceWithProgress(
+    request: ProcessInferenceRequest,
+    taskId: string,
+    observer?: (event: InferenceProgressEvent) => void
+  ): Promise<ProcessInferenceResponse>;
+  cancelTask(taskId: string): Promise<void>;
+  shutdownForExit(): Promise<void>;
   openInFileManager(path: string): Promise<void>;
 }

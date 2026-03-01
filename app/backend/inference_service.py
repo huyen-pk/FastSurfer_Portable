@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import base64
+import contextlib
 import importlib
+import io
 import os
+import re
 import shutil
 import sys
 import tempfile
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 
 def _get_default_ckpts_and_cfgs() -> tuple[dict[str, Any], dict[str, Any]]:
@@ -102,7 +105,40 @@ class FastSurferInferenceService:
             _resolve_resource_path("FastSurferCNN/config/FreeSurferColorLUT.txt")
         )
 
-    def run_prediction(self, input_path: Path, output_dir: Path) -> tuple[int | str, Path]:
+    def run_prediction(
+        self,
+        input_path: Path,
+        output_dir: Path,
+        progress_callback: Callable[[int, str], None] | None = None,
+    ) -> tuple[int | str, Path]:
+        class _ProgressCapture(io.TextIOBase):
+            def __init__(self, callback: Callable[[int, str], None] | None):
+                self.callback = callback
+                self._last_progress = -1
+                self._pattern = re.compile(r"(\d{1,3})%")
+
+            def write(self, s: str) -> int:
+                if not s:
+                    return 0
+
+                if self.callback:
+                    for match in self._pattern.findall(s):
+                        try:
+                            value = int(match)
+                        except ValueError:
+                            continue
+
+                        value = max(0, min(100, value))
+                        if value <= self._last_progress:
+                            continue
+                        self._last_progress = value
+                        self.callback(value, f"Processing MRI: {value}%")
+
+                return len(s)
+
+            def flush(self) -> None:
+                return
+
         _ensure_onnx_model_aliases()
         os.environ.setdefault("FASTSURFER_DISABLE_ONNX", "1")
         run_prediction_module = importlib.import_module("FastSurferCNN.run_prediction")
@@ -136,8 +172,14 @@ class FastSurferInferenceService:
             "lut": self.lut_path,
         }
 
+        if progress_callback:
+            progress_callback(1, "Starting MRI processing")
+
+        progress_capture = _ProgressCapture(progress_callback)
+
         try:
-            run_result = run_main(**kwargs)
+            with contextlib.redirect_stdout(progress_capture), contextlib.redirect_stderr(progress_capture):
+                run_result = run_main(**kwargs)
         except SystemExit as exc:
             run_result = exc.code
 
@@ -149,6 +191,9 @@ class FastSurferInferenceService:
         )
         if not seg_files:
             raise RuntimeError(f"No segmentation file produced. run_prediction result={run_result}")
+
+        if progress_callback:
+            progress_callback(100, "MRI processing completed")
 
         return run_result, seg_files[0]
 
@@ -195,6 +240,7 @@ class FastSurferInferenceService:
         *,
         output_dir: str | Path,
         return_base64: bool = False,
+        progress_callback: Callable[[int, str], None] | None = None,
     ) -> dict[str, Any]:
         resolved_input = Path(str(input_path)).expanduser().resolve()
         if not resolved_input.exists():
@@ -203,7 +249,11 @@ class FastSurferInferenceService:
         resolved_output = Path(str(output_dir)).expanduser().resolve()
         resolved_output.mkdir(parents=True, exist_ok=True)
 
-        run_result, seg_path = self.run_prediction(input_path=resolved_input, output_dir=resolved_output)
+        run_result, seg_path = self.run_prediction(
+            input_path=resolved_input,
+            output_dir=resolved_output,
+            progress_callback=progress_callback,
+        )
 
         result: dict[str, Any] = {
             "run_result": run_result,
