@@ -5,8 +5,8 @@ test.describe("fastsurfer_simple_viewer_behavior", () => {
     await page.goto("/");
 
     await expect(page.getByRole("heading", { name: "FastSurfer Processing" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Pick Files/Folders" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Start Processing" })).toBeDisabled();
+    await expect(page.getByRole("button", { name: "Pick Files" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Pick Folders" })).toBeVisible();
   });
 
   test("start_processing_should_render_processed_file_from_mocked_backend", async ({ page }) => {
@@ -38,9 +38,9 @@ test.describe("fastsurfer_simple_viewer_behavior", () => {
 
     await expect(page.getByTitle("subject01.nii.gz")).toBeVisible();
 
-    await page.getByRole("button", { name: "Start Processing" }).click();
+    await page.getByRole("button", { name: "Process" }).click();
 
-    await expect(page.getByText("Processing completed.")).toBeVisible();
+    await expect(page.locator("p.ack", { hasText: "Processing completed." })).toBeVisible();
     await expect(page.getByRole("button", { name: "subject01.nii.gz" })).toBeVisible();
     await expect(page.getByTitle("/tmp/subject01.mgz")).toBeVisible();
   });

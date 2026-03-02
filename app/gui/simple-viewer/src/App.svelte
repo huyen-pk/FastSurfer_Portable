@@ -211,34 +211,41 @@
   }
 
   async function maybeConfirmClose(event: { preventDefault: () => void }): Promise<void> {
-    if (isAppClosing) {
-      event.preventDefault();
-      return;
-    }
-
-    if (allowClose || !hasRunningOrQueuedTasks()) {
+    if (allowClose) {
       return;
     }
 
     event.preventDefault();
 
-    const resultDirs = gatherResultDirectories();
-    const resultHint = resultDirs.length > 0
-      ? `\n\nCurrent result directories:\n${resultDirs.join("\n")}`
-      : "\n\nResults are written to output directories reported in task results.";
-
-    const shouldQuit = await confirm(
-      `Tasks are still running or queued. Quit now to stop the app, or keep running to continue processing.${resultHint}`,
-      {
-        title: "Quit FastSurfer?",
-        kind: "warning",
-        okLabel: "Quit",
-        cancelLabel: "Keep Running"
+    if (isAppClosing) {
+      allowClose = true;
+      if (unlistenCloseRequested) {
+        unlistenCloseRequested();
+        unlistenCloseRequested = null;
       }
-    );
-
-    if (!shouldQuit) {
+      await getCurrentWindow().destroy();
       return;
+    }
+
+    if (hasRunningOrQueuedTasks()) {
+      const resultDirs = gatherResultDirectories();
+      const resultHint = resultDirs.length > 0
+        ? `\n\nCurrent result directories:\n${resultDirs.join("\n")}`
+        : "\n\nResults are written to output directories reported in task results.";
+
+      const shouldQuit = await confirm(
+        `Tasks are still running or queued. Quit now to stop the app, or keep running to continue processing.${resultHint}`,
+        {
+          title: "Quit FastSurfer?",
+          kind: "warning",
+          okLabel: "Quit",
+          cancelLabel: "Keep Running"
+        }
+      );
+
+      if (!shouldQuit) {
+        return;
+      }
     }
 
     isAppClosing = true;
@@ -253,19 +260,20 @@
     await shutdownWithTimeout;
 
     allowClose = true;
-    if (unlistenCloseRequested) {
-      unlistenCloseRequested();
-      unlistenCloseRequested = null;
-    }
-    await getCurrentWindow().close();
+    // if (unlistenCloseRequested) {
+    //   unlistenCloseRequested();
+    //   unlistenCloseRequested = null;
+    // }
+
+    await getCurrentWindow().destroy();
   }
 
-  onDestroy(() => {
-    if (unlistenCloseRequested) {
-      unlistenCloseRequested();
-      unlistenCloseRequested = null;
-    }
-  });
+  // onDestroy(() => {
+  //   if (unlistenCloseRequested) {
+  //     unlistenCloseRequested();
+  //     unlistenCloseRequested = null;
+  //   }
+  // });
 
   onMount(async () => {
     if (!isTauriRuntime()) return;
