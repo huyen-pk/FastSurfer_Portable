@@ -18,6 +18,7 @@ use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex};
 #[cfg(mobile)]
 use tauri::MobileEntryPoint;
+use tauri::Manager;
 
 /// The main entry point for the desktop application.
 ///
@@ -52,6 +53,7 @@ pub fn run() {
         .manage(app_state)
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_process::init())
         .invoke_handler(tauri::generate_handler![
             run_fastsurfer_inference,
             run_fastsurfer_inference_with_progress,
@@ -59,8 +61,19 @@ pub fn run() {
             shutdown_backend_for_exit,
             open_result_in_file_manager
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app_handle, event| {
+            if let tauri::RunEvent::ExitRequested { .. } = event {
+                let app_state = app_handle.state::<AppState>();
+                if let Some(backend) = app_state.backend.as_ref() {
+                    if let Err(err) = backend.shutdown_for_exit() {
+                        eprintln!("Failed to gracefully stop backend on app exit: {err}");
+                    }
+                }
+                app_handle.exit(0);
+            }
+        });
 }
 
 #[cfg(test)]

@@ -2,6 +2,7 @@
   import { onDestroy, onMount } from "svelte";
   import { open } from "@tauri-apps/plugin-dialog";
   import { confirm } from "@tauri-apps/plugin-dialog";
+  import { exit } from "@tauri-apps/plugin-process";
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import ProcessedResultViewer from "./components/ProcessedResultViewer.svelte";
   import TaskSidebar, { type SidebarTask } from "./components/TaskSidebar.svelte";
@@ -209,7 +210,9 @@
   function hasRunningOrQueuedTasks(): boolean {
     return tasks.some((task) => task.status === "processing" || task.status === "waiting");
   }
-
+  async function quitApp() {
+    await exit(0);
+  }
   async function maybeConfirmClose(event: { preventDefault: () => void }): Promise<void> {
     if (allowClose) {
       return;
@@ -218,12 +221,6 @@
     event.preventDefault();
 
     if (isAppClosing) {
-      allowClose = true;
-      if (unlistenCloseRequested) {
-        unlistenCloseRequested();
-        unlistenCloseRequested = null;
-      }
-      await getCurrentWindow().destroy();
       return;
     }
 
@@ -252,28 +249,22 @@
     isLoadingScreenVisible = true;
     isLoadingScreenDismissed = false;
 
-    const shutdownWithTimeout = Promise.race([
-      transport.shutdownForExit().catch(() => undefined),
-      new Promise((resolve) => setTimeout(resolve, 1500))
-    ]);
-
-    await shutdownWithTimeout;
-
     allowClose = true;
-    // if (unlistenCloseRequested) {
-    //   unlistenCloseRequested();
-    //   unlistenCloseRequested = null;
-    // }
+    if (unlistenCloseRequested) {
+      unlistenCloseRequested();
+      unlistenCloseRequested = null;
+    }
 
-    await getCurrentWindow().destroy();
+    // await getCurrentWindow().close();
+    await quitApp();
   }
 
-  // onDestroy(() => {
-  //   if (unlistenCloseRequested) {
-  //     unlistenCloseRequested();
-  //     unlistenCloseRequested = null;
-  //   }
-  // });
+  onDestroy(() => {
+    if (unlistenCloseRequested) {
+      unlistenCloseRequested();
+      unlistenCloseRequested = null;
+    }
+  });
 
   onMount(async () => {
     if (!isTauriRuntime()) return;
