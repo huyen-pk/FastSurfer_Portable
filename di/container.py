@@ -14,7 +14,7 @@
 
 """Dependency injection container using the injector framework."""
 
-from typing import Optional
+from typing import TYPE_CHECKING
 
 import yacs.config
 from injector import Injector, Module, provider, singleton
@@ -30,6 +30,9 @@ from di.factories import (
 from di.federated_factories import FederatedBackendFactory
 from fl import FederatedClientAPI
 from fl.backends import FederatedBackend
+
+if TYPE_CHECKING:
+    pass
 
 
 class FastSurferModule(Module):
@@ -121,6 +124,7 @@ class FastSurferModule(Module):
     def provide_federated_backend(
         self, 
         backend_factory: FederatedBackendFactory) -> FederatedBackend:
+
         return backend_factory.resolve_backend()
 
     @provider
@@ -128,6 +132,7 @@ class FastSurferModule(Module):
         self, 
         federated_learning_config: yacs.config.CfgNode,
         backend: FederatedBackend) -> FederatedClientAPI:
+
         return FederatedClientAPI(federated_learning_config, backend)
 
 

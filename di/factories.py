@@ -16,15 +16,24 @@
 
 
 from typing import Literal
+import logging
+import os
 import torch
 import yacs.config
 from torch.utils.data import DataLoader
 
 from FastSurferCNN.inference import Inference
-from di.wrappers import FastSurferCNN_FL_Trainer, TrainerBase
+try:
+    from di.wrappers import FastSurferCNN_FL_Trainer, TrainerBase
+except ImportError:
+    from di.wrappers import TrainerBase
+
+    FastSurferCNN_FL_Trainer = None
 
 from FastSurferCNN.data_loader import loader
 from FastSurferCNN.models import losses, networks               
+
+LOGGER = logging.getLogger(__name__)
 
 class ModelFactory:
     """
@@ -94,10 +103,25 @@ class InferenceEngineFactory:
         torch.nn.Module | None
              The inference engine instance if enabled, otherwise None.
         """
+        disable_onnx = os.getenv("FASTSURFER_DISABLE_ONNX", "").lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        if disable_onnx:
+            return Inference(cfg=cfg, device=torch.device("cpu"))
+
         if cfg.ONNX_FOLDER is not None:
             from FastSurferCNN.inference_onnx import InferenceONNX
-            return InferenceONNX(cfg=cfg)
-        return Inference(cfg=cfg)
+            try:
+                return InferenceONNX(cfg=cfg)
+            except Exception as exc:
+                LOGGER.warning(
+                    "Falling back to PyTorch inference engine because ONNX initialization failed: %s",
+                    exc,
+                )
+        return Inference(cfg=cfg, device=torch.device("cpu"))
 class LossFunctionFactory:
     """
     Factory for creating loss functions.
@@ -234,6 +258,10 @@ class ModelTrainerFactory:
         """
         trainer: TrainerBase = None
         if(model_name == "FastSurferCNN"):
+            if FastSurferCNN_FL_Trainer is None:
+                raise RuntimeError(
+                    "FastSurferCNN_FL_Trainer is unavailable. Install optional federated learning dependencies to use training wrappers."
+                )
             trainer = FastSurferCNN_FL_Trainer(self.__cfg)
 
         return trainer

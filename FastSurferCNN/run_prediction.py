@@ -271,8 +271,12 @@ class RunModelOnData:
         self.models = {}
         for plane, view in self.view_ops.items():
             if all(view[key] is not None for key in ("cfg", "ckpt")):
-                # self.models[plane] = Inference(view["cfg"], ckpt=view["ckpt"], device=self.device, lut=self.lut)
-                self.models[plane] = self.inference_engine_factory.create_inference_engine(view["cfg"])
+                self.models[plane] = Inference(
+                    view["cfg"],
+                    ckpt=view["ckpt"],
+                    device=self.device,
+                    lut=self.lut,
+                )
 
         try:
             self.vox_size = _vox_size(vox_size)
@@ -718,7 +722,12 @@ def main(
                 LOGGER.info("Creating aseg based on segmentation...")
                 aseg = rta.reduce_to_aseg(pred_data)
                 aseg[bm == 0] = 0
-                aseg = rta.flip_wm_islands(aseg)
+                try:
+                    aseg = rta.flip_wm_islands(aseg)
+                except AssertionError:
+                    LOGGER.warning(
+                        "Skipping flip_wm_islands due to empty connected-component labels in aseg post-processing."
+                    )
                 aseg_name = subject.filename_in_subject_folder(aseg_name)
                 # Change datatype to np.uint8, else mri_cc will fail!
                 futures.append(eval.async_save_img(aseg_name, aseg, orig_img, dtype=np.uint8))

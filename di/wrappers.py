@@ -1,7 +1,6 @@
 from abc import ABC, abstractmethod
 from typing import Any
 from FastSurferCNN.train import Trainer as FastSurferCNNTrainerBase
-from fl.api import FederatedClientAPI
 
 class TrainerBase(ABC):
     @abstractmethod

@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 class FederatedBackend:
     """Interface for federated backends."""
     def __init__(self, cfg: yacs.config.CfgNode):
-        self.__config = cfg
+        self._config = cfg
         self.__last_synced_model_checksum: dict[str, Any] = {
             "model_checksum": None,
             "timestamp": None,
@@ -68,6 +68,9 @@ class FederatedBackend:
 class InternalEWMABackend(FederatedBackend):
     """In-process EWMA turbo aggregation backend."""
 
+    def __init__(self, cfg: Optional[yacs.config.CfgNode] = None):
+        super().__init__(cfg or get_federated_cfg_defaults())
+
     def _collect_state(self, model) -> Dict[str, Any]:
         state = {}
         try:
@@ -89,7 +92,7 @@ class InternalEWMABackend(FederatedBackend):
         curr_weight: float,
     ) -> Dict[str, Any]:
         total = prev_weight + curr_weight
-        if abs(total - 1.0) > self.__config.WEIGHT_SUM_TOLERANCE:
+        if abs(total - 1.0) > self._config.WEIGHT_SUM_TOLERANCE:
             logger.warning(
                 "Federated weights do not sum to 1.0 (%.3f + %.3f); normalizing.",
                 prev_weight,
@@ -99,8 +102,8 @@ class InternalEWMABackend(FederatedBackend):
                 prev_weight = prev_weight / total
                 curr_weight = curr_weight / total
             else:
-                prev_weight = self.__config.TURBO_AGGREGATE_PREVIOUS_WEIGHT
-                curr_weight = self.__config.TURBO_AGGREGATE_CURRENT_WEIGHT
+                prev_weight = self._config.TURBO_AGGREGATE_PREVIOUS_WEIGHT
+                curr_weight = self._config.TURBO_AGGREGATE_CURRENT_WEIGHT
         merged: Dict[str, Any] = {}
         for key, tensor in new_state.items():
             prev = previous_state.get(key)
@@ -121,19 +124,19 @@ class InternalEWMABackend(FederatedBackend):
             logger.info(
                 "Turbo aggregate seeded global state at round %s (topology=%s)",
                 round_idx,
-                self.__config.TOPOLOGY,
+                self._config.TOPOLOGY,
             )
             return state
         merged = self._merge(
             previous_state=global_state,
             new_state=state,
-            prev_weight=self.__config.TURBO_AGGREGATE_PREVIOUS_WEIGHT,
-            curr_weight=self.__config.TURBO_AGGREGATE_CURRENT_WEIGHT,
+            prev_weight=self._config.TURBO_AGGREGATE_PREVIOUS_WEIGHT,
+            curr_weight=self._config.TURBO_AGGREGATE_CURRENT_WEIGHT,
         )
         logger.info(
             "Turbo aggregate updated global state at round %s (topology=%s)",
             round_idx,
-            self.__config.TOPOLOGY,
+            self._config.TOPOLOGY,
         )
         return merged
 
@@ -162,19 +165,18 @@ class InternalEWMABackend(FederatedBackend):
             agg = self._merge(
                 agg,
                 state,
-                self.__config.TURBO_AGGREGATE_PREVIOUS_WEIGHT,
-                self.__config.TURBO_AGGREGATE_CURRENT_WEIGHT,
+                self._config.TURBO_AGGREGATE_PREVIOUS_WEIGHT,
+                self._config.TURBO_AGGREGATE_CURRENT_WEIGHT,
             )
         return agg
 
-
-import flwr.server.app as ServerApp
-import flwr.server.strategy as Strategy
-import flwr.client as ClientApp
 class FlowerFLBackend(FederatedBackend):
-    """FlowerFL-backed aggregation."""
-    def __init__(self):
+    """Flower-backed aggregation that falls back to internal EWMA if unavailable."""
+
+    def __init__(self, cfg: Optional[yacs.config.CfgNode] = None):
+        super().__init__(cfg or get_federated_cfg_defaults())
         self._flowerfl = None
+        self._delegate = InternalEWMABackend(cfg=self._config)
         try:
             import flowerfl  # type: ignore
 
@@ -183,43 +185,35 @@ class FlowerFLBackend(FederatedBackend):
             logger.warning(
                 "FlowerFL backend requested but 'flowerfl' is not installed; using internal aggregator."
             )
-    server = ServerApp()
-    @server.main()
+
     def secure_sync(
         self,
         model,
         global_state: Optional[Dict[str, Any]],
         round_idx: int,
     ) -> Optional[Dict[str, Any]]:
+        state = self._delegate.secure_sync(model, global_state, round_idx)
         if self._flowerfl is not None:
             version = getattr(self._flowerfl, "__version__", "unknown")
             logger.info("FlowerFL aggregation completed (flowerfl version=%s)", version)
-        return global_state
+        return state
 
-    client = ClientApp()
-    @client.train()
     def apply(self, model, global_state: Optional[Dict[str, Any]]) -> None:
-        if not global_state:
-            return
-        try:
-            model.load_state_dict(global_state, strict=False)
-        except (RuntimeError, ValueError, TypeError) as exc:  # pragma: no cover - defensive
-            logger.warning(
-                "Failed to apply FlowerFL global state (cached keys=%s, model keys=%s): %s",
-                len(global_state),
-                len(model.state_dict()),
-                exc,
-            )
+        self._delegate.apply(model, global_state)
+
     def aggregate_states(
         self, client_states: Iterable[Dict[str, Any]]
     ) -> Optional[Dict[str, Any]]:
         return self._delegate.aggregate_states(client_states)
+
+
 class FedMLBackend(FederatedBackend):
     """FedML-backed aggregation that falls back to internal EWMA if unavailable."""
 
-    def __init__(self):
+    def __init__(self, cfg: Optional[yacs.config.CfgNode] = None):
+        super().__init__(cfg or get_federated_cfg_defaults())
         self._fedml = None
-        self._delegate = InternalEWMABackend()
+        self._delegate = InternalEWMABackend(cfg=self._config)
         try:
             import fedml  # type: ignore
 

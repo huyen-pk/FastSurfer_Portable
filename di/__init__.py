@@ -14,27 +14,24 @@
 
 """Dependency Injection components for FastSurferCNN."""
 
-from di.config_loader import ConfigLoader
+from di.config_loader import ConfigLoader, FLConfigLoader
 from di.container import FastSurferModule, create_injector
 from di.factories import (
     DataLoaderFactory,
+    InferenceEngineFactory,
     LossFunctionFactory,
+    ModelTrainerFactory,
     ModelFactory,
-    OptimizerFactory,
-    SchedulerFactory,
 )
-from di.federated_factories import FederatedBackend, FederatedBackendFactory
 
 __all__ = [
     "ConfigLoader",
-    "DeviceManager",
+    "FLConfigLoader",
     "ModelFactory",
+    "InferenceEngineFactory",
     "LossFunctionFactory",
-    "OptimizerFactory",
     "DataLoaderFactory",
-    "SchedulerFactory",
-    "FederatedClientFactory",
-    "FederatedServerFactory",
+    "ModelTrainerFactory",
     "FastSurferModule",
     "create_injector",
 ]
