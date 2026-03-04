@@ -126,6 +126,16 @@
     selectedPaths = [...new Set([...selectedPaths, ...dedupedIncoming])];
   }
 
+  function handleFileInputChange(): void {
+    const paths = normalizeBrowserInputFiles(filePickerInput);
+    addPickedPaths(paths);
+  }
+
+  function handleFolderInputChange(): void {
+    const paths = normalizeBrowserInputFiles(folderPickerInput);
+    addPickedPaths(paths);
+  }
+
   function pickFromBrowserInput(input: HTMLInputElement | null): Promise<string[]> {
     if (!input) return Promise.resolve([]);
 
@@ -512,6 +522,7 @@
     <input
       bind:this={filePickerInput}
       data-testid="file-picker-input"
+      on:change={handleFileInputChange}
       type="file"
       multiple
       accept=".nii,.nii.gz,.mgz,.mgh"
@@ -520,6 +531,7 @@
     <input
       bind:this={folderPickerInput}
       data-testid="folder-picker-input"
+      on:change={handleFolderInputChange}
       type="file"
       multiple
       webkitdirectory

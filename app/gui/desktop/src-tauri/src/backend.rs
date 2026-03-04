@@ -74,6 +74,7 @@ impl BackendState {
         params: Value,
         mut on_progress: Option<&mut dyn FnMut(Value)>,
     ) -> Result<Value, String> {
+        eprintln!("[trace][backend] run_ipc_request_with_progress method={method}");
         let mut process = self
             .process
             .lock()
@@ -231,6 +232,11 @@ impl BackendState {
         file_paths: &[String],
         folder_paths: &[String],
     ) -> Result<(String, Vec<String>), String> {
+        eprintln!(
+            "[trace][backend] start_predict_batch file_paths={} folder_paths={}",
+            file_paths.len(),
+            folder_paths.len()
+        );
         let result = self.run_ipc_request(
             "start_predict_batch",
             json!({
@@ -254,6 +260,12 @@ impl BackendState {
             .map(ToString::to_string)
             .collect::<Vec<String>>();
 
+        eprintln!(
+            "[trace][backend] start_predict_batch ack='{}' requested_paths={}",
+            ack_message,
+            requested_paths.len()
+        );
+
         Ok((ack_message, requested_paths))
     }
 
@@ -265,6 +277,11 @@ impl BackendState {
         fallback_ack_message: &str,
         fallback_requested_paths: &[String],
     ) -> Result<ProcessingRunResult, String> {
+        eprintln!(
+            "[trace][backend] predict_batch file_paths={} folder_paths={}",
+            file_paths.len(),
+            folder_paths.len()
+        );
         let result = self.run_ipc_request(
             "predict_batch",
             json!({
@@ -368,6 +385,11 @@ impl BackendState {
         task_id: &str,
         on_progress: Option<&mut dyn FnMut(usize, String)>,
     ) -> Result<InferenceOutput, String> {
+        eprintln!(
+            "[trace][backend] predict_single_path task_id={} input_path={}",
+            task_id,
+            input_path
+        );
         let mut on_progress = on_progress;
         let mut progress_adapter = |value: Value| {
             let progress = value

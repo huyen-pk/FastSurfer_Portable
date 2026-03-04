@@ -12,13 +12,24 @@ fn emit_progress_event(app_handle: &AppHandle, event: InferenceProgressEvent) {
 }
 
 /// Helper that orchestrates the batch prediction flow by calling the backend.
-fn run_fastsurfer_inference_with_backend(
+pub(crate) fn run_fastsurfer_inference_with_backend(
     backend: &BackendState,
     file_paths: &[String],
     folder_paths: &[String],
 ) -> Result<ProcessingRunResult, String> {
+    eprintln!(
+        "[trace][prediction] run_fastsurfer_inference_with_backend start file_paths={} folder_paths={}",
+        file_paths.len(),
+        folder_paths.len()
+    );
     let (start_ack_message, start_requested_paths) =
         backend.start_predict_batch(file_paths, folder_paths)?;
+
+    eprintln!(
+        "[trace][prediction] start_predict_batch ack='{}' requested_paths={}",
+        start_ack_message,
+        start_requested_paths.len()
+    );
 
     backend.predict_batch(
         file_paths,
@@ -29,7 +40,7 @@ fn run_fastsurfer_inference_with_backend(
 }
 
 /// Wrapper for inference that checks for backend availability first.
-fn run_fastsurfer_inference_with_app_state(
+pub(crate) fn run_fastsurfer_inference_with_app_state(
     backend: Option<&BackendState>,
     backend_init_error: Option<&str>,
     file_paths: Vec<String>,
@@ -56,6 +67,13 @@ pub fn run_fastsurfer_inference_with_progress_with_app_state(
     file_paths: Vec<String>,
     folder_paths: Vec<String>,
 ) -> Result<ProcessingRunResult, String> {
+    eprintln!(
+        "[trace][prediction] run_with_progress task_id={} file_paths={} folder_paths={}",
+        task_id,
+        file_paths.len(),
+        folder_paths.len()
+    );
+
     let backend = backend.ok_or_else(|| {
         let detail = backend_init_error.unwrap_or("unknown backend initialization error");
         format!("Backend is unavailable in this desktop runtime: {detail}")
@@ -264,6 +282,11 @@ pub async fn run_fastsurfer_inference(
     file_paths: Vec<String>,
     folder_paths: Vec<String>,
 ) -> Result<ProcessingRunResult, String> {
+    eprintln!(
+        "[trace][tauri-cmd] run_fastsurfer_inference called file_paths={} folder_paths={}",
+        file_paths.len(),
+        folder_paths.len()
+    );
     let backend = app_state.backend.clone();
     let backend_init_error = app_state.backend_init_error.clone();
 
@@ -288,6 +311,12 @@ pub async fn run_fastsurfer_inference_with_progress(
     file_paths: Vec<String>,
     folder_paths: Vec<String>,
 ) -> Result<ProcessingRunResult, String> {
+    eprintln!(
+        "[trace][tauri-cmd] run_fastsurfer_inference_with_progress called task_id={} file_paths={} folder_paths={}",
+        task_id,
+        file_paths.len(),
+        folder_paths.len()
+    );
     let backend = app_state.backend.clone();
     let backend_init_error = app_state.backend_init_error.clone();
     let cancelled_tasks = app_state.cancelled_tasks.clone();

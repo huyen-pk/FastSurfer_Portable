@@ -118,7 +118,7 @@ linux = "https://surfer.nmr.mgh.harvard.edu/pub/dist/freesurfer/{version}/freesu
 macOS = "https://surfer.nmr.mgh.harvard.edu/pub/dist/freesurfer/{version}/freesurfer-macOS-darwin_x86_64-{version}.tar.gz"
 
 [tool.setuptools]
-packages = ['FastSurferCNN','CerebNet','recon_surf','HypVINN']
+packages = ['FastSurferCNN','CerebNet','recon_surf','HypVINN','di','fl']
 
 [tool.pydocstyle]
 convention = 'numpy'

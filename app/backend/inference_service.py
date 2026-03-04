@@ -13,6 +13,35 @@ from pathlib import Path
 from typing import Any, Callable
 
 
+_PERCENT_PATTERN = re.compile(r"(?<!\d)(\d{1,3})\s*%(?!\d)")
+_FRACTION_PATTERN = re.compile(r"(?<!\d)(\d{1,5})\s*/\s*(\d{1,5})(?!\d)")
+
+
+def _extract_progress_values_from_line(line: str) -> list[int]:
+    progress_values: list[int] = []
+
+    for match in _PERCENT_PATTERN.findall(line):
+        try:
+            progress_values.append(int(match))
+        except ValueError:
+            continue
+
+    for done_raw, total_raw in _FRACTION_PATTERN.findall(line):
+        try:
+            done = int(done_raw)
+            total = int(total_raw)
+        except ValueError:
+            continue
+
+        if total <= 0 or done < 0:
+            continue
+
+        progress_values.append(int((done / total) * 100))
+
+    deduped = sorted(set(progress_values))
+    return deduped
+
+
 def _get_default_ckpts_and_cfgs() -> tuple[dict[str, Any], dict[str, Any]]:
     from FastSurferCNN.utils.checkpoint import get_config_file, load_checkpoint_config_defaults
 
@@ -115,29 +144,66 @@ class FastSurferInferenceService:
             def __init__(self, callback: Callable[[int, str], None] | None):
                 self.callback = callback
                 self._last_progress = -1
-                self._pattern = re.compile(r"(\d{1,3})%")
+                self._residual = ""
+                self._last_hint = ""
+
+            def _emit(self, value: int, message: str) -> None:
+                if not self.callback:
+                    return
+
+                bounded = max(1, min(95, int(value)))
+                if bounded <= self._last_progress:
+                    return
+
+                self._last_progress = bounded
+                self.callback(bounded, message)
 
             def write(self, s: str) -> int:
                 if not s:
                     return 0
 
-                if self.callback:
-                    for match in self._pattern.findall(s):
-                        try:
-                            value = int(match)
-                        except ValueError:
-                            continue
+                text = self._residual + s
+                lines = re.split(r"[\r\n]+", text)
+                if text and text[-1] not in "\r\n":
+                    self._residual = lines.pop() if lines else text
+                else:
+                    self._residual = ""
 
-                        value = max(0, min(100, value))
-                        if value <= self._last_progress:
-                            continue
-                        self._last_progress = value
-                        self.callback(value, f"Processing MRI: {value}%")
+                for raw_line in lines:
+                    line = raw_line.strip()
+                    if not line:
+                        continue
+
+                    extracted_values = _extract_progress_values_from_line(line)
+                    if extracted_values:
+                        for extracted in extracted_values:
+                            self._emit(extracted, f"Processing MRI: {max(1, min(95, extracted))}%")
+                        continue
+
+                    if self.callback and self._last_progress < 95 and line != self._last_hint:
+                        self._last_hint = line
+                        self._emit(self._last_progress + 1, "Processing MRI...")
 
                 return len(s)
 
             def flush(self) -> None:
-                return
+                if not self._residual:
+                    return
+
+                line = self._residual.strip()
+                self._residual = ""
+                if not line:
+                    return
+
+                extracted_values = _extract_progress_values_from_line(line)
+                if extracted_values:
+                    for extracted in extracted_values:
+                        self._emit(extracted, f"Processing MRI: {max(1, min(95, extracted))}%")
+                    return
+
+                if self.callback and self._last_progress < 95 and line != self._last_hint:
+                    self._last_hint = line
+                    self._emit(self._last_progress + 1, "Processing MRI...")
 
         _ensure_onnx_model_aliases()
         os.environ.setdefault("FASTSURFER_DISABLE_ONNX", "1")

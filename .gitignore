@@ -34,3 +34,6 @@ junit-results.xml
 /app/gui/desktop/dist/
 /app/gui/desktop/backend/
 /app/gui/desktop/src-tauri/target/
+
+# Test output
+*/out/

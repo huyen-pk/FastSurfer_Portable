@@ -6,6 +6,10 @@ import type { ProcessInferenceRequest, ProcessInferenceResponse, Transport } fro
 export function createIpcTransport(): Transport {
   return {
     async processInference({ filePaths, folderPaths }: ProcessInferenceRequest): Promise<ProcessInferenceResponse> {
+      console.debug("[trace][frontend-ipc] invoke run_fastsurfer_inference", {
+        filePaths: filePaths.length,
+        folderPaths: folderPaths.length
+      });
       return invoke<ProcessInferenceResponse>("run_fastsurfer_inference", {
         filePaths,
         folderPaths
@@ -16,18 +20,26 @@ export function createIpcTransport(): Transport {
       taskId: string,
       observer?: (event: InferenceProgressEvent) => void
     ): Promise<ProcessInferenceResponse> {
+      console.debug("[trace][frontend-ipc] subscribe progress + invoke", {
+        taskId,
+        filePaths: filePaths.length,
+        folderPaths: folderPaths.length
+      });
       const unlisten = await listen<InferenceProgressEvent>("fastsurfer://inference-progress", (event) => {
         if (event.payload?.taskId === taskId && observer) {
+          console.debug("[trace][frontend-ipc] progress event", event.payload);
           observer(event.payload);
         }
       });
 
       try {
-        return await invoke<ProcessInferenceResponse>("run_fastsurfer_inference_with_progress", {
+        const response = await invoke<ProcessInferenceResponse>("run_fastsurfer_inference_with_progress", {
           taskId,
           filePaths,
           folderPaths
         });
+        console.debug("[trace][frontend-ipc] invoke completed", { taskId });
+        return response;
       } finally {
         unlisten();
       }

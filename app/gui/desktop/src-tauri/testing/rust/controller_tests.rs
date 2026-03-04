@@ -1,14 +1,18 @@
-use super::{
-    load_desktop_env, open_result_in_file_manager, resolve_backend_binary_path_from,
-    resolve_backend_launch_command_from,
-    resolve_python_executable, run_fastsurfer_inference_with_app_state,
-    run_fastsurfer_inference_with_backend, validate_result_path, BackendProcess, BackendState,
+use crate::backend::BackendState;
+use crate::file_mgmt::{open_result_in_file_manager, validate_result_path};
+use crate::prediction::{
+    run_fastsurfer_inference_with_app_state, run_fastsurfer_inference_with_backend,
+};
+use crate::process_mgmt::{
+    load_desktop_env, resolve_backend_binary_path_from, resolve_backend_launch_command_from,
+    resolve_python_executable, BackendLaunchCommand, BackendProcess,
 };
 use serde_json::{json, Value};
 use std::fs;
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::AtomicU32;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 fn next_test_id() -> usize {
@@ -28,7 +32,7 @@ fn create_backend_state_with_mocked_responses(responses: &[&str]) -> BackendStat
 
     let mut child = Command::new("sh")
         .arg("-c")
-        .arg(script)
+        .arg(script.clone())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
@@ -41,12 +45,20 @@ fn create_backend_state_with_mocked_responses(responses: &[&str]) -> BackendStat
         .take()
         .expect("failed to capture mock backend stdout");
 
+    let current_pid = child.id();
+
     BackendState {
         process: std::sync::Mutex::new(BackendProcess {
-            _child: child,
+            child,
             stdin,
             stdout: BufReader::new(stdout),
         }),
+        launch: BackendLaunchCommand {
+            program: "sh".to_string(),
+            args: vec!["-c".to_string(), script],
+        },
+        repo_root: None,
+        current_pid: AtomicU32::new(current_pid),
     }
 }
 
@@ -69,12 +81,20 @@ fn create_backend_state_from_shell_script(script: &str) -> BackendState {
         .take()
         .expect("failed to capture scripted mock backend stdout");
 
+    let current_pid = child.id();
+
     BackendState {
         process: std::sync::Mutex::new(BackendProcess {
-            _child: child,
+            child,
             stdin,
             stdout: BufReader::new(stdout),
         }),
+        launch: BackendLaunchCommand {
+            program: "sh".to_string(),
+            args: vec!["-c".to_string(), script.to_string()],
+        },
+        repo_root: None,
+        current_pid: AtomicU32::new(current_pid),
     }
 }
 
@@ -88,12 +108,20 @@ fn create_backend_state_from_process(mut child: std::process::Child) -> BackendS
         .take()
         .expect("failed to capture process stdout");
 
+    let current_pid = child.id();
+
     BackendState {
         process: std::sync::Mutex::new(BackendProcess {
-            _child: child,
+            child,
             stdin,
             stdout: BufReader::new(stdout),
         }),
+        launch: BackendLaunchCommand {
+            program: "unknown".to_string(),
+            args: Vec::new(),
+        },
+        repo_root: None,
+        current_pid: AtomicU32::new(current_pid),
     }
 }
 
@@ -343,6 +371,30 @@ fn run_ipc_request_with_invalid_json_should_return_invalid_json_error() {
 }
 
 #[test]
+fn predict_single_path_should_forward_progress_events_from_backend() {
+    let backend = create_backend_state_from_shell_script(
+        "while IFS= read -r _line; do printf '%s\\n' '{\"event\":\"progress\",\"progress\":2,\"message\":\"Processing MRI: 2%\"}'; printf '%s\\n' '{\"event\":\"progress\",\"progress\":71,\"message\":\"Processing MRI: 71%\"}'; printf '%s\\n' '{\"ok\":true,\"result\":{\"output_path\":\"/tmp/out/pred.mgz\",\"output_filename\":\"pred.mgz\",\"run_result\":\"ok\"}}'; done",
+    );
+
+    let mut captured: Vec<(usize, String)> = Vec::new();
+    let prediction = backend
+        .predict_single_path(
+            "/in/subject.mgz",
+            "task-progress-test",
+            Some(&mut |progress, message| {
+                captured.push((progress, message));
+            }),
+        )
+        .expect("expected predict_single_path to succeed");
+
+    assert_eq!(prediction.output_filename, "pred.mgz");
+    assert_eq!(prediction.output_path, "/tmp/out/pred.mgz");
+    assert_eq!(captured.len(), 2);
+    assert_eq!(captured[0].0, 2);
+    assert_eq!(captured[1].0, 71);
+}
+
+#[test]
 fn start_predict_batch_with_valid_response_should_return_ack_and_paths() {
     let backend = create_backend_state_with_mocked_responses(&[
         r#"{"ok":true,"result":{"ack_message":"queued","requested_paths":["a.nii.gz","b.nii.gz"]}}"#,
@@ -405,11 +457,9 @@ fn run_fastsurfer_inference_with_backend_should_merge_start_and_predict_results(
         r#"{"ok":true,"result":{"ack_message":"done","requested_paths":["/in/a.nii.gz"],"results":[{"input_path":"/in/a.nii.gz","output_path":"/tmp/out/a.mgz","output_filename":"a.mgz","run_result":"ok"}]}}"#,
     ]);
 
-    let result = run_fastsurfer_inference_with_backend(
-        &backend,
-        vec!["/in/a.nii.gz".to_string()],
-        vec![],
-    )
+    let file_paths = vec!["/in/a.nii.gz".to_string()];
+    let folder_paths: Vec<String> = vec![];
+    let result = run_fastsurfer_inference_with_backend(&backend, &file_paths, &folder_paths)
     .expect("expected run_fastsurfer_inference_with_backend to succeed");
 
     assert_eq!(result.requested_paths, vec!["/in/a.nii.gz".to_string()]);
@@ -480,16 +530,291 @@ fn run_fastsurfer_inference_with_test_data_should_produce_output_file() {
     let input_path = repo_root.join("app/gui/desktop/src-tauri/testing/data/Subject140/140_orig.mgz");
     assert!(input_path.exists(), "test input file not found: {}", input_path.display());
 
-    let result = run_fastsurfer_inference_with_backend(
-        &backend,
-        vec![input_path.to_string_lossy().to_string()],
-        vec![],
-    )
+    let file_paths = vec![input_path.to_string_lossy().to_string()];
+    let folder_paths: Vec<String> = vec![];
+    let result = run_fastsurfer_inference_with_backend(&backend, &file_paths, &folder_paths)
     .expect("expected e2e inference call to succeed");
 
     assert!(!result.results.is_empty());
     let output_path = PathBuf::from(&result.results[0].output_path);
     assert!(output_path.exists(), "inference output not found: {}", output_path.display());
+}
+
+#[test]
+#[ignore = "Runs real FastSurfer inference via python IPC server and test data"]
+fn predict_single_path_with_test_data_should_emit_progress_events() {
+    let Some(repo_root) = find_repo_root() else {
+        panic!("failed to locate repo root for e2e inference test");
+    };
+
+    let cwd = repo_root.join("app/gui/desktop/src-tauri");
+    let exe_dir = cwd.join("target/debug");
+    load_desktop_env(&cwd, &exe_dir);
+    let launch = resolve_backend_launch_command_from(&cwd, &exe_dir)
+        .expect("failed to resolve backend launch command");
+
+    let mut launch_cmd = Command::new(&launch.program);
+    launch_cmd
+        .args(&launch.args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit());
+
+    if !launch.args.is_empty() {
+        let python_bin = resolve_python_executable().expect("python executable not found");
+        if !python_has_fastsurfer_runtime(&python_bin, &repo_root) {
+            if is_ci() {
+                eprintln!(
+                    "python runtime missing FastSurfer dependencies in CI; skipping e2e inference test"
+                );
+                return;
+            }
+            panic!(
+                "python runtime missing FastSurfer dependencies in local environment (required: torch, FastSurferCNN)"
+            );
+        }
+
+        launch_cmd.current_dir(&repo_root);
+        launch_cmd.env("PYTHONPATH", repo_root.to_string_lossy().to_string());
+    }
+
+    let child = launch_cmd
+        .spawn()
+        .expect("failed to spawn backend process");
+
+    let backend = create_backend_state_from_process(child);
+    let input_path = repo_root.join("app/gui/desktop/src-tauri/testing/data/Subject140/140_orig.mgz");
+    assert!(input_path.exists(), "test input file not found: {}", input_path.display());
+
+    let mut captured_progress: Vec<(usize, String)> = Vec::new();
+    let prediction = backend
+        .predict_single_path(
+            &input_path.to_string_lossy(),
+            "task-e2e-progress",
+            Some(&mut |progress, message| {
+                captured_progress.push((progress, message));
+            }),
+        )
+        .expect("expected e2e predict_single_path to succeed");
+
+    assert!(
+        !captured_progress.is_empty(),
+        "expected at least one progress event from backend"
+    );
+    assert!(
+        captured_progress
+            .iter()
+            .any(|(progress, _)| *progress >= 2),
+        "expected parsed tqdm progress events"
+    );
+
+    let output_path = PathBuf::from(&prediction.output_path);
+    assert!(output_path.exists(), "inference output not found: {}", output_path.display());
+}
+
+// Progress Event Emission and Interception Tests
+
+#[test]
+fn progress_callback_should_capture_sequential_progress_events() {
+    let backend = create_backend_state_from_shell_script(
+        "while IFS= read -r _line; do printf '%s\\n' '{\"event\":\"progress\",\"progress\":10,\"message\":\"Step 1\"}'; printf '%s\\n' '{\"event\":\"progress\",\"progress\":30,\"message\":\"Step 2\"}'; printf '%s\\n' '{\"event\":\"progress\",\"progress\":50,\"message\":\"Step 3\"}'; printf '%s\\n' '{\"ok\":true,\"result\":{\"output_path\":\"/tmp/out.mgz\",\"output_filename\":\"out.mgz\",\"run_result\":\"ok\"}}'; done",
+    );
+
+    let mut captured: Vec<(usize, String)> = Vec::new();
+    let prediction = backend
+        .predict_single_path(
+            "/in/test.mgz",
+            "progress-seq-test",
+            Some(&mut |progress, message| {
+                captured.push((progress, message));
+            }),
+        )
+        .expect("expected predict_single_path to succeed");
+
+    // Should capture 3 progress events before final response
+    assert_eq!(captured.len(), 3);
+    assert_eq!(captured[0].0, 10);
+    assert_eq!(captured[1].0, 30);
+    assert_eq!(captured[2].0, 50);
+    assert_eq!(captured[0].1, "Step 1");
+    assert_eq!(captured[1].1, "Step 2");
+    assert_eq!(captured[2].1, "Step 3");
+    assert_eq!(prediction.output_filename, "out.mgz");
+}
+
+#[test]
+fn progress_callback_should_handle_progress_at_boundaries_0_and_100() {
+    let backend = create_backend_state_from_shell_script(
+        "while IFS= read -r _line; do printf '%s\\n' '{\"event\":\"progress\",\"progress\":0,\"message\":\"Starting\"}'; printf '%s\\n' '{\"event\":\"progress\",\"progress\":100,\"message\":\"Complete\"}'; printf '%s\\n' '{\"ok\":true,\"result\":{\"output_path\":\"/tmp/out.mgz\",\"output_filename\":\"out.mgz\",\"run_result\":\"ok\"}}'; done",
+    );
+
+    let mut captured: Vec<(usize, String)> = Vec::new();
+    backend
+        .predict_single_path(
+            "/in/test.mgz",
+            "boundary-test",
+            Some(&mut |progress, message| {
+                captured.push((progress, message));
+            }),
+        )
+        .expect("expected predict_single_path to succeed");
+
+    assert_eq!(captured.len(), 2);
+    assert_eq!(captured[0].0, 0);
+    assert_eq!(captured[1].0, 100);
+}
+
+#[test]
+fn progress_callback_should_ignore_non_progress_events() {
+    let backend = create_backend_state_from_shell_script(
+        "while IFS= read -r _line; do printf '%s\\n' '{\"event\":\"log\",\"level\":\"info\",\"message\":\"Not a progress event\"}'; printf '%s\\n' '{\"event\":\"progress\",\"progress\":42,\"message\":\"Real progress\"}'; printf '%s\\n' '{\"ok\":true,\"result\":{\"output_path\":\"/tmp/out.mgz\",\"output_filename\":\"out.mgz\",\"run_result\":\"ok\"}}'; done",
+    );
+
+    let mut captured: Vec<(usize, String)> = Vec::new();
+    backend
+        .predict_single_path(
+            "/in/test.mgz",
+            "event-filter-test",
+            Some(&mut |progress, message| {
+                captured.push((progress, message));
+            }),
+        )
+        .expect("expected predict_single_path to succeed");
+
+    // Should only capture the actual progress event, not the log event
+    assert_eq!(captured.len(), 1);
+    assert_eq!(captured[0].0, 42);
+    assert_eq!(captured[0].1, "Real progress");
+}
+
+#[test]
+fn progress_callback_should_handle_rapid_progress_updates() {
+    let mut rapid_updates = String::new();
+    for i in 1..=10 {
+        let progress = i * 10;
+        rapid_updates.push_str(&format!(
+            "printf '%s\\n' '{{\"event\":\"progress\",\"progress\":{},\"message\":\"Update {}\"}}'; ",
+            progress, i
+        ));
+    }
+    rapid_updates.push_str("printf '%s\\n' '{\"ok\":true,\"result\":{\"output_path\":\"/tmp/out.mgz\",\"output_filename\":\"out.mgz\",\"run_result\":\"ok\"}}'; ");
+
+    let script = format!(
+        "while IFS= read -r _line; do {}done",
+        rapid_updates
+    );
+
+    let backend = create_backend_state_from_shell_script(&script);
+
+    let mut captured: Vec<(usize, String)> = Vec::new();
+    backend
+        .predict_single_path(
+            "/in/test.mgz",
+            "rapid-test",
+            Some(&mut |progress, message| {
+                captured.push((progress, message));
+            }),
+        )
+        .expect("expected predict_single_path to succeed");
+
+    assert_eq!(captured.len(), 10);
+    for (i, (progress, message)) in captured.iter().enumerate() {
+        let expected_progress = (i + 1) * 10;
+        assert_eq!(*progress, expected_progress);
+        assert_eq!(*message, format!("Update {}", i + 1));
+    }
+}
+
+#[test]
+fn progress_callback_should_extract_message_correctly() {
+    let backend = create_backend_state_from_shell_script(
+        "while IFS= read -r _line; do printf '%s\\n' '{\"event\":\"progress\",\"progress\":45,\"message\":\"Processing sagittal plane: 181/256\"}'; printf '%s\\n' '{\"ok\":true,\"result\":{\"output_path\":\"/tmp/out.mgz\",\"output_filename\":\"out.mgz\",\"run_result\":\"ok\"}}'; done",
+    );
+
+    let mut captured: Vec<(usize, String)> = Vec::new();
+    backend
+        .predict_single_path(
+            "/in/test.mgz",
+            "message-test",
+            Some(&mut |progress, message| {
+                captured.push((progress, message));
+            }),
+        )
+        .expect("expected predict_single_path to succeed");
+
+    assert_eq!(captured.len(), 1);
+    assert_eq!(captured[0].1, "Processing sagittal plane: 181/256");
+}
+
+#[test]
+fn progress_callback_should_not_fail_if_none_callback_provided() {
+    let backend = create_backend_state_from_shell_script(
+        "while IFS= read -r _line; do printf '%s\\n' '{\"event\":\"progress\",\"progress\":50,\"message\":\"Processing\"}'; printf '%s\\n' '{\"ok\":true,\"result\":{\"output_path\":\"/tmp/out.mgz\",\"output_filename\":\"out.mgz\",\"run_result\":\"ok\"}}'; done",
+    );
+
+    // Call with None callback - should not panic
+    let prediction = backend
+        .predict_single_path("/in/test.mgz", "no-callback-test", None)
+        .expect("expected predict_single_path to succeed");
+
+    assert_eq!(prediction.output_filename, "out.mgz");
+}
+
+// GUI Display Tests (backend layer verification)
+
+#[test]
+fn progress_events_with_all_required_fields_should_be_processable_by_gui() {
+    let backend = create_backend_state_from_shell_script(
+        "while IFS= read -r _line; do printf '%s\\n' '{\"event\":\"progress\",\"progress\":33,\"message\":\"Sagittal: 95/256\",\"task_id\":\"segmentation-001\"}'; printf '%s\\n' '{\"event\":\"progress\",\"progress\":67,\"message\":\"Coronal: 180/256\",\"task_id\":\"segmentation-001\"}'; printf '%s\\n' '{\"ok\":true,\"result\":{\"output_path\":\"/tmp/out.mgz\",\"output_filename\":\"out.mgz\",\"run_result\":\"ok\"}}'; done",
+    );
+
+    let mut captured: Vec<(usize, String)> = Vec::new();
+    backend
+        .predict_single_path(
+            "/in/test.mgz",
+            "gui-display-test",
+            Some(&mut |progress, message| {
+                captured.push((progress, message));
+            }),
+        )
+        .expect("expected predict_single_path to succeed");
+
+    // Both events should be captured with correct values for GUI rendering
+    assert_eq!(captured.len(), 2);
+    assert_eq!(captured[0].0, 33);
+    assert!(captured[0].1.contains("Sagittal"));
+    assert_eq!(captured[1].0, 67);
+    assert!(captured[1].1.contains("Coronal"));
+}
+
+#[test]
+fn progress_events_should_be_monotonically_increasing_in_typical_workflow() {
+    let backend = create_backend_state_from_shell_script(
+        "while IFS= read -r _line; do printf '%s\\n' '{\"event\":\"progress\",\"progress\":5,\"message\":\"Started\"}'; printf '%s\\n' '{\"event\":\"progress\",\"progress\":20,\"message\":\"One third\"}'; printf '%s\\n' '{\"event\":\"progress\",\"progress\":50,\"message\":\"Halfway\"}'; printf '%s\\n' '{\"event\":\"progress\",\"progress\":85,\"message\":\"Almost done\"}'; printf '%s\\n' '{\"event\":\"progress\",\"progress\":100,\"message\":\"Complete\"}'; printf '%s\\n' '{\"ok\":true,\"result\":{\"output_path\":\"/tmp/out.mgz\",\"output_filename\":\"out.mgz\",\"run_result\":\"ok\"}}'; done",
+    );
+
+    let mut captured: Vec<(usize, String)> = Vec::new();
+    backend
+        .predict_single_path(
+            "/in/test.mgz",
+            "monotonic-test",
+            Some(&mut |progress, message| {
+                captured.push((progress, message));
+            }),
+        )
+        .expect("expected predict_single_path to succeed");
+
+    assert_eq!(captured.len(), 5);
+    let progress_values: Vec<usize> = captured.iter().map(|(p, _)| *p).collect();
+    assert_eq!(progress_values, vec![5, 20, 50, 85, 100]);
+
+    // Verify they are monotonically increasing
+    for i in 1..progress_values.len() {
+        assert!(
+            progress_values[i] >= progress_values[i - 1],
+            "progress should be monotonically increasing"
+        );
+    }
 }
 
 #[test]

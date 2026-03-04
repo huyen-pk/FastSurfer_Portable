@@ -32,6 +32,12 @@ from concurrent.futures import Executor, Future, ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Literal
 
+if __package__ in (None, ""):
+    repo_root = Path(__file__).resolve().parents[1]
+    repo_root_str = str(repo_root)
+    if repo_root_str not in sys.path:
+        sys.path.insert(0, repo_root_str)
+
 import numpy as np
 import torch
 import yacs.config

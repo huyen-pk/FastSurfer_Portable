@@ -5,8 +5,14 @@ from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
 
 PROJECT_ROOT = Path('main.spec').resolve().parents[2]
-FASTSURFER_HIDDENIMPORTS = collect_submodules('FastSurferCNN')
-FASTSURFER_DATAS = collect_data_files('FastSurferCNN')
+FASTSURFER_HIDDENIMPORTS = (
+    collect_submodules('FastSurferCNN')
+    + collect_submodules('di')
+    + collect_submodules('fl')
+)
+FASTSURFER_DATAS = (
+    collect_data_files('FastSurferCNN')
+)
 
 
 def collect_project_data_tree(source_dir: Path, dest_root: str):

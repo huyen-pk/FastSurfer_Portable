@@ -11,6 +11,12 @@ use std::io::{BufRead, Write};
 /// # Returns
 /// `Ok(())` on success, or an error description.
 pub fn write_ipc_request(process: &mut BackendProcess, request: &Value) -> Result<(), String> {
+    let method = request
+        .get("method")
+        .and_then(Value::as_str)
+        .unwrap_or("<unknown>");
+    eprintln!("[trace][ipc] -> method={method} payload={request}");
+
     let request_line = format!("{}\n", request);
     process
         .stdin
@@ -66,6 +72,7 @@ pub fn read_ipc_response(
                     .map(|name| name == "progress")
                     .unwrap_or(false)
                 {
+                    eprintln!("[trace][ipc] <- progress event={response}");
                     if let Some(handler) = on_progress.as_deref_mut() {
                         handler(response);
                     }
@@ -73,6 +80,7 @@ pub fn read_ipc_response(
                 }
 
                 if response.get("ok").is_some() {
+                    eprintln!("[trace][ipc] <- response={response}");
                     return Ok(response);
                 }
 
