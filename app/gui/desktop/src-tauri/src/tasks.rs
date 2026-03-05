@@ -1,4 +1,5 @@
 use crate::backend::BackendState;
+use crate::feature_flags::InferenceEngine;
 use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex};
 use tauri::State;
@@ -12,6 +13,8 @@ pub struct AppState {
     pub backend_init_error: Option<String>,
     /// Set of task IDs that have been requested to cancel.
     pub cancelled_tasks: Arc<Mutex<BTreeSet<String>>>,
+    /// Active inference engine selected for this app run.
+    pub inference_engine: InferenceEngine,
 }
 
 /// Helper command to flag a specific task ID as cancelled.

@@ -152,11 +152,33 @@
   }
 
   function mapInferenceResult(result: RawInferenceResult): InferenceResult {
+    const rawArtifacts = result.artifacts;
+    const brainmaskPath = rawArtifacts?.brainmaskPath || rawArtifacts?.brainmask_path;
+    const asegPath = rawArtifacts?.asegPath || rawArtifacts?.aseg_path;
+
+    const artifacts = brainmaskPath || asegPath
+      ? {
+        ...(brainmaskPath ? { brainmaskPath: String(brainmaskPath) } : {}),
+        ...(asegPath ? { asegPath: String(asegPath) } : {})
+      }
+      : undefined;
+
+    const hasQcPassed = typeof result.qc?.passed === "boolean";
+    const hasQcMessage = typeof result.qc?.message === "string" && result.qc.message.length > 0;
+    const qc = hasQcPassed || hasQcMessage
+      ? {
+        ...(hasQcPassed ? { passed: Boolean(result.qc?.passed) } : {}),
+        ...(hasQcMessage ? { message: String(result.qc?.message) } : {})
+      }
+      : undefined;
+
     return {
       inputPath: String(result.inputPath || result.input_path || ""),
       outputPath: String(result.outputPath || result.output_path || ""),
       outputFilename: String(result.outputFilename || result.output_filename || ""),
-      runResult: String(result.runResult || result.run_result || "")
+      runResult: String(result.runResult || result.run_result || ""),
+      ...(artifacts ? { artifacts } : {}),
+      ...(qc ? { qc } : {})
     };
   }
 

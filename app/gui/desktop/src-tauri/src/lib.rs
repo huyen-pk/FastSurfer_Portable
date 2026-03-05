@@ -1,6 +1,8 @@
 // Declare child modules.
 pub mod backend;
+pub mod feature_flags;
 pub mod file_mgmt;
+pub mod inference;
 pub mod models;
 pub mod prediction;
 pub mod process_mgmt;
@@ -9,6 +11,7 @@ pub mod transport;
 pub mod utils;
 
 use crate::backend::BackendState;
+use crate::feature_flags::resolve_inference_engine;
 use crate::file_mgmt::open_result_in_file_manager;
 use crate::prediction::{
     run_fastsurfer_inference, run_fastsurfer_inference_with_progress,
@@ -30,6 +33,12 @@ use tauri::Manager;
 /// 5. Runs the Tauri application loop.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let inference_engine = resolve_inference_engine();
+    eprintln!(
+        "[trace][startup] selected inference engine={}",
+        inference_engine.as_str()
+    );
+
     // Attempt to initialize the backend (start the python subprocess).
     let result = BackendState::new();
 
@@ -38,6 +47,7 @@ pub fn run() {
             backend: Some(Arc::new(backend)),
             backend_init_error: None,
             cancelled_tasks: Arc::new(Mutex::new(BTreeSet::new())),
+            inference_engine,
         },
         Err(err) => {
             eprintln!("FastSurfer desktop backend initialization failed: {err}");
@@ -45,6 +55,7 @@ pub fn run() {
                 backend: None,
                 backend_init_error: Some(err),
                 cancelled_tasks: Arc::new(Mutex::new(BTreeSet::new())),
+                inference_engine,
             }
         }
     };

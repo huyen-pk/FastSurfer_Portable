@@ -1,4 +1,6 @@
 use crate::backend::BackendState;
+use crate::feature_flags::InferenceEngine;
+use crate::inference::{run_native_inference, run_native_inference_with_progress};
 use crate::models::{InferenceOutput, InferenceProgressEvent, ProcessingRunResult};
 use crate::tasks::AppState;
 use std::collections::BTreeSet;
@@ -271,6 +273,7 @@ pub fn run_fastsurfer_inference_with_progress_with_app_state(
         ack_message,
         requested_paths,
         result_directories,
+        qc_summary: None,
         results,
     })
 }
@@ -287,6 +290,10 @@ pub async fn run_fastsurfer_inference(
         file_paths.len(),
         folder_paths.len()
     );
+    if app_state.inference_engine == InferenceEngine::RustOnnx {
+        return run_native_inference(&file_paths, &folder_paths);
+    }
+
     let backend = app_state.backend.clone();
     let backend_init_error = app_state.backend_init_error.clone();
 
@@ -317,6 +324,15 @@ pub async fn run_fastsurfer_inference_with_progress(
         file_paths.len(),
         folder_paths.len()
     );
+    if app_state.inference_engine == InferenceEngine::RustOnnx {
+        return run_native_inference_with_progress(
+            &app_handle,
+            &task_id,
+            &file_paths,
+            &folder_paths,
+        );
+    }
+
     let backend = app_state.backend.clone();
     let backend_init_error = app_state.backend_init_error.clone();
     let cancelled_tasks = app_state.cancelled_tasks.clone();

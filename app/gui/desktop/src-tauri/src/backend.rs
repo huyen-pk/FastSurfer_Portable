@@ -1,4 +1,4 @@
-use crate::models::{InferenceOutput, ProcessingRunResult};
+use crate::models::{InferenceArtifacts, InferenceOutput, InferenceQc, ProcessingRunResult};
 use crate::process_mgmt::{
     load_desktop_env, resolve_backend_launch_command_from, resolve_python_backend_script_path_from,
     resolve_repo_root_from_python_script, spawn_backend_process, BackendLaunchCommand,
@@ -344,11 +344,38 @@ impl BackendState {
                 })
                 .unwrap_or_else(|| "null".to_string());
 
+            let artifacts = entry
+                .get("artifacts")
+                .and_then(Value::as_object)
+                .map(|obj| InferenceArtifacts {
+                    brainmask_path: obj
+                        .get("brainmask_path")
+                        .and_then(Value::as_str)
+                        .map(ToString::to_string),
+                    aseg_path: obj
+                        .get("aseg_path")
+                        .and_then(Value::as_str)
+                        .map(ToString::to_string),
+                });
+
+            let qc = entry
+                .get("qc")
+                .and_then(Value::as_object)
+                .map(|obj| InferenceQc {
+                    passed: obj.get("passed").and_then(Value::as_bool),
+                    message: obj
+                        .get("message")
+                        .and_then(Value::as_str)
+                        .map(ToString::to_string),
+                });
+
             results.push(InferenceOutput {
                 input_path,
                 output_path,
                 output_filename,
                 run_result,
+                artifacts,
+                qc,
             });
         }
 
@@ -374,6 +401,10 @@ impl BackendState {
             ack_message,
             requested_paths,
             result_directories,
+            qc_summary: result
+                .get("qc_summary")
+                .and_then(Value::as_str)
+                .map(ToString::to_string),
             results,
         })
     }
@@ -441,11 +472,38 @@ impl BackendState {
             })
             .unwrap_or_else(|| "null".to_string());
 
+        let artifacts = result
+            .get("artifacts")
+            .and_then(Value::as_object)
+            .map(|obj| InferenceArtifacts {
+                brainmask_path: obj
+                    .get("brainmask_path")
+                    .and_then(Value::as_str)
+                    .map(ToString::to_string),
+                aseg_path: obj
+                    .get("aseg_path")
+                    .and_then(Value::as_str)
+                    .map(ToString::to_string),
+            });
+
+        let qc = result
+            .get("qc")
+            .and_then(Value::as_object)
+            .map(|obj| InferenceQc {
+                passed: obj.get("passed").and_then(Value::as_bool),
+                message: obj
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .map(ToString::to_string),
+            });
+
         Ok(InferenceOutput {
             input_path: input_path.to_string(),
             output_path,
             output_filename,
             run_result,
+            artifacts,
+            qc,
         })
     }
 }

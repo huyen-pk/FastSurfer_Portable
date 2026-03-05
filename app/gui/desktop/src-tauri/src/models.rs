@@ -1,5 +1,25 @@
 use serde::Serialize;
 
+/// Additional output artifact paths produced from a segmentation result.
+#[derive(Serialize, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct InferenceArtifacts {
+    /// Optional brainmask file path.
+    pub brainmask_path: Option<String>,
+    /// Optional aseg file path.
+    pub aseg_path: Option<String>,
+}
+
+/// Quality-control metadata produced during inference.
+#[derive(Serialize, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct InferenceQc {
+    /// Whether volume-based QC passed for this result.
+    pub passed: Option<bool>,
+    /// Optional QC details.
+    pub message: Option<String>,
+}
+
 /// Represents the output of a single inference run on an input file.
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -12,6 +32,10 @@ pub struct InferenceOutput {
     pub output_filename: String,
     /// A raw string result status from the backend.
     pub run_result: String,
+    /// Optional artifact outputs generated alongside segmentation.
+    pub artifacts: Option<InferenceArtifacts>,
+    /// Optional quality-control metadata.
+    pub qc: Option<InferenceQc>,
 }
 
 /// Represents the aggregated results of a batch processing run.
@@ -24,6 +48,8 @@ pub struct ProcessingRunResult {
     pub requested_paths: Vec<String>,
     /// The directories where results were stored.
     pub result_directories: Vec<String>,
+    /// Optional batch-level QC summary.
+    pub qc_summary: Option<String>,
     /// The individual results for each processed file.
     pub results: Vec<InferenceOutput>,
 }

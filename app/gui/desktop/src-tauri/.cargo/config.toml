@@ -1,0 +1,2 @@
+[env]
+PROTOC = "/home/huyenpk/anaconda3/bin/protoc"

@@ -24,3 +24,21 @@ tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tauri-plugin-process = "2.3.1"
+candle = { package = "candle-core", version = "0.9.2" }
+candle-onnx = "0.9.2"
+nifti = { version = "0.17", features = ["ndarray_volumes"] }
+ndarray = "0.16"
+
+[patch.crates-io]
+candle-onnx = { path = "vendor/candle-onnx" }
+
+[dev-dependencies]
+criterion = "0.5"
+libc = "0.2"
+
+[[bench]]
+name = "candle_inference_bench"
+harness = false
+
+[profile.test]
+opt-level = 3
