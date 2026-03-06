@@ -1,13 +1,10 @@
 """Factories for federated learning components."""
 import logging
-from typing import Literal
+from typing import Literal, get_args
 import yacs.config
 
 from fl.config.federated_defaults import get_federated_cfg_defaults
 from di.config_loader import ConfigLoader, FLConfigLoader
-from fl import (
-    FederatedLearningConfig,
-)
 from fl.backends import FedMLBackend, FederatedBackend, InternalEWMABackend
 
 logger = logging.getLogger(__name__)
@@ -61,11 +58,11 @@ class FederatedBackendFactory:
         self.fl_config = fl_config_loader.load_config()
 
     def resolve_backend(self) -> FederatedBackend:
+        """Return a backend instance by name."""
         # TODO: check for availability and compatibility between requested backend and aggregation/topology choices
         name = self.fl_config.BACKEND
-        """Return a backend instance by name."""
         normalized = name.lower()
-        if normalized not in SUPPORTED_BACKENDS.__args__:
+        if normalized not in get_args(SUPPORTED_BACKENDS):
             logger.warning(
             "Unknown federated backend '%s' specified; falling back to internal EWMA.",
             name,
@@ -73,4 +70,5 @@ class FederatedBackendFactory:
             return InternalEWMABackend()
         if normalized == "fedml":
             return FedMLBackend()
+        return InternalEWMABackend()
         

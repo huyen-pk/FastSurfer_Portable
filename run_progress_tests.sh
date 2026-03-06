@@ -19,8 +19,14 @@ cd "$PROJECT_ROOT"
 
 # Python environment setup
 echo -e "${BLUE}Setting up Python environment...${NC}"
-FASTSURFER_ENV="${CONDA_PREFIX:-/home/huyenpk/anaconda3}/envs/fastsurfer"
+FASTSURFER_ENV="${CONDA_PREFIX:-$HOME/anaconda3}/envs/fastsurfer"
 export PATH="${FASTSURFER_ENV}/bin:$PATH"
+
+if [[ ! -x "${FASTSURFER_ENV}/bin/python" ]]; then
+  echo -e "${YELLOW}Could not find python at ${FASTSURFER_ENV}/bin/python${NC}"
+  echo "Set CONDA_PREFIX or activate the fastsurfer conda environment before running this script."
+  exit 1
+fi
 
 # Test 1: Backend Progress Parser
 echo ""

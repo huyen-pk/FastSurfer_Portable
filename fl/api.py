@@ -23,13 +23,13 @@ class FederatedClientAPI:
         self.backend = backend
         self._current_state = None
         self._round = 0
-        if self.config.enabled:
+        if self.config.ENABLED:
             logger.info(
                 "Federated mode enabled (backend=%s, strategy=%s, topology=%s, silo=%s)",
-                self.config.backend,
-                self.config.aggregation,
-                self.config.topology,
-                self.config.silo_id or "unspecified",
+                self.config.BACKEND,
+                self.config.AGGREGATION,
+                self.config.TOPOLOGY,
+                self.config.SILO_ID or "unspecified",
             )
 
     # TODO: handle race condition
@@ -49,7 +49,7 @@ class FederatedClientAPI:
         Returns:
             bool: True if sync was performed, False otherwise.
         """
-        if not self.config.enabled:
+        if not self.config.ENABLED:
             return False
 
         if self.config.SYNC_INTERVAL <= 0:

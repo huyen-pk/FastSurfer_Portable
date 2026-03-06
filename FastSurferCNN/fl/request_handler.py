@@ -13,10 +13,8 @@ from flwr.clientapp import ClientApp
 
 from di.config_loader import ConfigLoader, FLConfigLoader
 from di.container import create_injector
-from FastSurferCNN.train import Trainer
 from FastSurferCNN.fl.task import FastSurferCNN_FL_Trainer
-from fl.api import FederatedClientAPI, FederatedOrchestrator
-from fl.backends import FederatedBackend
+from fl.api import FederatedClientAPI
 from typing import Callable
 
 client_app = ClientApp()
@@ -61,7 +59,9 @@ class CommandDispatcher:
         """
         
         cmd: commands = msg.content.get("cmd", "unknown")  
-        handler = self._handlers.get(cmd)
+        handler = self._handlers.get(cmd) or self._handlers.get("unknown")
+        if handler is None:
+            raise ValueError(f"No handler registered for command: {cmd}")
         return handler(msg, context)
 
 ################# REQUEST HANDLERS ##################
@@ -105,8 +105,9 @@ def handle_evaluate_request(msg: Message, context: Context) -> Message:
 def handle_sync_request(msg: Message, context: Context) -> Message:
     incoming_weights = msg.content["weights"].to_torch_state_dict()
     federated_client = injector.get(FederatedClientAPI)
-    federated_client.update_internal_state(new_state=incoming_weights, round_idx=0)
+    federated_client.update_internal_state(new_state=incoming_weights, checksum="")
     # TODO: acknowledge sync request and report sync status to message queue
+    return msg
 
 def handle_inference_request(msg: Message, context: Context) -> Message:
     pass

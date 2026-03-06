@@ -19,132 +19,58 @@ from unittest.mock import MagicMock, patch
 
 import yacs.config
 
-from FastSurferCNN.di import (
-    ConfigLoader,
-    DataLoaderFactory,
-    DeviceManager,
-    LossFunctionFactory,
-    ModelFactory,
-    OptimizerFactory,
-    SchedulerFactory,
-    create_injector,
-)
+from di import ConfigLoader, FLConfigLoader, create_injector
+from fl.api import FederatedClientAPI
+from fl.backends import FederatedBackend
 
 
 class TestDIContainer(unittest.TestCase):
     """Test cases for dependency injection container."""
 
-    @patch("FastSurferCNN.di.container.DeviceManager")
-    def test_create_injector(self, mock_device_manager_class):
+    def test_create_injector(self):
         """Test creating an injector."""
-        mock_cfg = MagicMock(spec=yacs.config.CfgNode)
-        
-        injector = create_injector(cfg=mock_cfg)
-        
+        injector = create_injector()
         self.assertIsNotNone(injector)
 
-    @patch("FastSurferCNN.di.container.DeviceManager")
-    def test_injector_provides_device_manager(self, mock_device_manager_class):
-        """Test that injector provides DeviceManager."""
-        mock_device_manager = MagicMock()
-        mock_device_manager_class.return_value = mock_device_manager
-        
-        injector = create_injector()
-        device_manager = injector.get(DeviceManager)
-        
-        self.assertIsNotNone(device_manager)
-
-    @patch("FastSurferCNN.di.container.ModelFactory")
-    def test_injector_provides_model_factory(self, mock_model_factory_class):
-        """Test that injector provides ModelFactory."""
-        mock_factory = MagicMock()
-        mock_model_factory_class.return_value = mock_factory
-        
-        injector = create_injector()
-        factory = injector.get(ModelFactory)
-        
-        self.assertIsNotNone(factory)
-
-    @patch("FastSurferCNN.di.container.LossFunctionFactory")
-    def test_injector_provides_loss_factory(self, mock_loss_factory_class):
-        """Test that injector provides LossFunctionFactory."""
-        mock_factory = MagicMock()
-        mock_loss_factory_class.return_value = mock_factory
-        
-        injector = create_injector()
-        factory = injector.get(LossFunctionFactory)
-        
-        self.assertIsNotNone(factory)
-
-    @patch("FastSurferCNN.di.container.OptimizerFactory")
-    def test_injector_provides_optimizer_factory(self, mock_optimizer_factory_class):
-        """Test that injector provides OptimizerFactory."""
-        mock_factory = MagicMock()
-        mock_optimizer_factory_class.return_value = mock_factory
-        
-        injector = create_injector()
-        factory = injector.get(OptimizerFactory)
-        
-        self.assertIsNotNone(factory)
-
-    @patch("FastSurferCNN.di.container.DataLoaderFactory")
-    def test_injector_provides_dataloader_factory(self, mock_dataloader_factory_class):
-        """Test that injector provides DataLoaderFactory."""
-        mock_factory = MagicMock()
-        mock_dataloader_factory_class.return_value = mock_factory
-        
-        injector = create_injector()
-        factory = injector.get(DataLoaderFactory)
-        
-        self.assertIsNotNone(factory)
-
-    @patch("FastSurferCNN.di.container.SchedulerFactory")
-    def test_injector_provides_scheduler_factory(self, mock_scheduler_factory_class):
-        """Test that injector provides SchedulerFactory."""
-        mock_factory = MagicMock()
-        mock_scheduler_factory_class.return_value = mock_factory
-        
-        injector = create_injector()
-        factory = injector.get(SchedulerFactory)
-        
-        self.assertIsNotNone(factory)
-
-    @patch("FastSurferCNN.di.container.ConfigLoader")
-    def test_injector_provides_config_loader(self, mock_config_loader_class):
-        """Test that injector provides ConfigLoader."""
-        mock_loader = MagicMock()
-        mock_config_loader_class.return_value = mock_loader
-        
-        injector = create_injector()
-        loader = injector.get(ConfigLoader)
-        
-        self.assertIsNotNone(loader)
-
-    @patch("FastSurferCNN.di.container.DeviceManager")
-    def test_device_manager_singleton(self, mock_device_manager_class):
-        """Test that DeviceManager is a singleton."""
-        mock_device_manager = MagicMock()
-        mock_device_manager_class.return_value = mock_device_manager
-        
-        injector = create_injector()
-        dm1 = injector.get(DeviceManager)
-        dm2 = injector.get(DeviceManager)
-        
-        # Should be the same instance
-        self.assertIs(dm1, dm2)
-
-    @patch("FastSurferCNN.di.container.ConfigLoader")
-    def test_config_loader_singleton(self, mock_config_loader_class):
-        """Test that ConfigLoader is a singleton."""
-        mock_loader = MagicMock()
-        mock_config_loader_class.return_value = mock_loader
-        
+    def test_injector_provides_config_loader_singleton(self):
+        """Test ConfigLoader is provided as singleton."""
         injector = create_injector()
         loader1 = injector.get(ConfigLoader)
         loader2 = injector.get(ConfigLoader)
-        
-        # Should be the same instance
+
+        self.assertIsInstance(loader1, ConfigLoader)
         self.assertIs(loader1, loader2)
+
+    def test_injector_provides_fl_config_loader_singleton(self):
+        """Test FLConfigLoader is provided as singleton."""
+        injector = create_injector()
+        loader1 = injector.get(FLConfigLoader)
+        loader2 = injector.get(FLConfigLoader)
+
+        self.assertIsInstance(loader1, FLConfigLoader)
+        self.assertIs(loader1, loader2)
+
+    @patch("di.container.ConfigLoader.load_config")
+    @patch("di.container.FLConfigLoader.load_config")
+    def test_injector_provides_federated_backend_and_client(self, mock_fl_load_config, mock_load_config):
+        """Test federated backend/client bindings are resolvable."""
+        app_cfg = MagicMock(spec=yacs.config.CfgNode)
+        fl_cfg = MagicMock(spec=yacs.config.CfgNode)
+        fl_cfg.BACKEND = "internal_ewma"
+        fl_cfg.ENABLED = False
+        fl_cfg.AGGREGATION = "turbo_aggregate"
+        fl_cfg.TOPOLOGY = "asynchronous_decentralized_parallel_sgd"
+        fl_cfg.SILO_ID = ""
+
+        mock_load_config.return_value = app_cfg
+        mock_fl_load_config.return_value = fl_cfg
+
+        injector = create_injector()
+        backend = injector.get(FederatedBackend)
+        client = injector.get(FederatedClientAPI)
+
+        self.assertIsInstance(backend, FederatedBackend)
+        self.assertIsInstance(client, FederatedClientAPI)
 
 
 if __name__ == "__main__":

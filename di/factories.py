@@ -51,7 +51,7 @@ class ModelFactory:
 
     def set_config(self, cfg: yacs.config.CfgNode):
         """
-        Set the configuration for the data loader factory.
+        Set the configuration for the model factory.
 
         Parameters
         ----------
@@ -242,7 +242,7 @@ class ModelTrainerFactory:
 
     def create_model_trainer(
             self, 
-            model_name: Literal["FastSurferCNN", "HypVINN", "CorpusCallosum", "CerebNet" ]) -> torch.nn.Module:
+            model_name: Literal["FastSurferCNN", "HypVINN", "CorpusCallosum", "CerebNet" ]) -> TrainerBase | None:
         """
         Create a model trainer based on configuration.
 

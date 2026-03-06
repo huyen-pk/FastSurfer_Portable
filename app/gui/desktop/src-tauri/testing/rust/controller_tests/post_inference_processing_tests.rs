@@ -151,7 +151,7 @@ print(
         .arg(&pred_nii)
         .arg(&rust_aseg_raw)
         .arg(&rust_mask_raw)
-        .arg("0.25")
+        .arg("0.05")
         .current_dir(&repo_root)
         .env("PYTHONPATH", repo_root.to_string_lossy().to_string())
         .output()

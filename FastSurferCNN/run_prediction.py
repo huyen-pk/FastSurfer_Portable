@@ -56,8 +56,6 @@ from FastSurferCNN.utils.common import SubjectDirectory, SubjectList, find_devic
 from FastSurferCNN.utils.load_config import load_config
 from FastSurferCNN.utils.parallel import SerialExecutor, pipeline
 from FastSurferCNN.utils.parser_defaults import SubjectDirectoryConfig
-from di.container import create_injector
-from di.factories import InferenceEngineFactory
 
 LOGGER = logging.getLogger(__name__)
 
@@ -189,8 +187,6 @@ class RunModelOnData:
     viewagg_device: torch.device
     orientation: OrientationType
     _pool: Executor
-    injector = create_injector()
-    inference_engine_factory = injector.get(InferenceEngineFactory)
 
     def __init__(
             self,

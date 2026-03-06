@@ -56,6 +56,17 @@ class FastSurferModule(Module):
             The configuration loader instance.
         """
         return ConfigLoader()
+
+    @singleton
+    @provider
+    def provide_fl_config_loader(self) -> FLConfigLoader:
+        """Provide a singleton FLConfigLoader instance for node mode."""
+        return FLConfigLoader(mode="node")
+
+    @provider
+    def provide_federated_learning_config(self, fl_config_loader: FLConfigLoader) -> yacs.config.CfgNode:
+        """Provide federated learning config node."""
+        return fl_config_loader.load_config()
     
     @provider
     def provide_inference_engine_factory(self) -> InferenceEngineFactory:
@@ -140,11 +151,6 @@ def create_injector() -> Injector:
     """
     Create and configure a dependency injector for FastSurfer.
 
-    Parameters
-    ----------
-    cfg : yacs.config.CfgNode, optional
-        Configuration to use.
-
     Returns
     -------
     Injector
@@ -152,7 +158,7 @@ def create_injector() -> Injector:
 
     Examples
     --------
-    >>> injector = create_injector(cfg)
+    >>> injector = create_injector()
     >>> model_factory = injector.get(ModelFactory)
     """
     return Injector([FastSurferModule()])

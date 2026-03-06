@@ -37,3 +37,6 @@ junit-results.xml
 
 # Test output
 */out/
+
+# Local/private environment files
+**/.env

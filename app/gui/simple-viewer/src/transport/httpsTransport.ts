@@ -1,4 +1,3 @@
-import { invoke } from "@tauri-apps/api/core";
 import type { InferenceProgressEvent } from "../types/inference";
 import type { ProcessInferenceRequest, ProcessInferenceResponse, Transport } from "./types";
 
@@ -99,10 +98,8 @@ export function createHttpsTransport(baseUrl = "http://127.0.0.1:8000"): Transpo
     async shutdownForExit(): Promise<void> {
       return;
     },
-    async openInFileManager(path: string): Promise<void> {
-      await invoke<void>("open_result_in_file_manager", {
-        resultPath: path
-      });
+    async openInFileManager(_path: string): Promise<void> {
+      throw new Error("Opening files in the system file manager is only supported in desktop IPC runtime.");
     }
   };
 }

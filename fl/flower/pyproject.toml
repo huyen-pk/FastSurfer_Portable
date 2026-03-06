@@ -44,5 +44,4 @@ dependencies = [
 ]
 
 # Optional metadata for the app
-authors = ["@huyen-pk"]
 license = "Apache-2.0"

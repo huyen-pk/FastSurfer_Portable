@@ -17,16 +17,9 @@
 import unittest
 from unittest.mock import MagicMock, patch
 
-import torch
 import yacs.config
 
-from FastSurferCNN.di import (
-    DataLoaderFactory,
-    LossFunctionFactory,
-    ModelFactory,
-    OptimizerFactory,
-    SchedulerFactory,
-)
+from di.factories import DataLoaderFactory, LossFunctionFactory, ModelFactory, ModelTrainerFactory
 
 
 class TestModelFactory(unittest.TestCase):
@@ -37,11 +30,11 @@ class TestModelFactory(unittest.TestCase):
         """Test model creation."""
         mock_model = MagicMock()
         mock_build_model.return_value = mock_model
-        
+
         cfg = MagicMock(spec=yacs.config.CfgNode)
-        factory = ModelFactory()
-        model = factory.create_model(cfg)
-        
+        factory = ModelFactory(cfg=cfg)
+        model = factory.create_model()
+
         mock_build_model.assert_called_once_with(cfg)
         self.assertEqual(model, mock_model)
 
@@ -54,31 +47,13 @@ class TestLossFunctionFactory(unittest.TestCase):
         """Test loss function creation."""
         mock_loss = MagicMock()
         mock_get_loss_func.return_value = mock_loss
-        
+
         cfg = MagicMock(spec=yacs.config.CfgNode)
-        factory = LossFunctionFactory()
-        loss = factory.create_loss_function(cfg)
-        
+        factory = LossFunctionFactory(cfg=cfg)
+        loss = factory.create_loss_function()
+
         mock_get_loss_func.assert_called_once_with(cfg)
         self.assertEqual(loss, mock_loss)
-
-
-class TestOptimizerFactory(unittest.TestCase):
-    """Test cases for OptimizerFactory."""
-
-    @patch("FastSurferCNN.models.optimizer.get_optimizer")
-    def test_create_optimizer(self, mock_get_optimizer):
-        """Test optimizer creation."""
-        mock_optimizer = MagicMock()
-        mock_get_optimizer.return_value = mock_optimizer
-        
-        model = MagicMock(spec=torch.nn.Module)
-        cfg = MagicMock(spec=yacs.config.CfgNode)
-        factory = OptimizerFactory()
-        optimizer = factory.create_optimizer(model, cfg)
-        
-        mock_get_optimizer.assert_called_once_with(model, cfg)
-        self.assertEqual(optimizer, mock_optimizer)
 
 
 class TestDataLoaderFactory(unittest.TestCase):
@@ -89,31 +64,30 @@ class TestDataLoaderFactory(unittest.TestCase):
         """Test data loader creation."""
         mock_dataloader = MagicMock()
         mock_get_dataloader.return_value = mock_dataloader
-        
+
         cfg = MagicMock(spec=yacs.config.CfgNode)
-        factory = DataLoaderFactory()
-        dataloader = factory.create_dataloader(cfg, "train")
-        
+        factory = DataLoaderFactory(cfg=cfg)
+        dataloader = factory.create_dataloader("train")
+
         mock_get_dataloader.assert_called_once_with(cfg, "train")
         self.assertEqual(dataloader, mock_dataloader)
 
 
-class TestSchedulerFactory(unittest.TestCase):
-    """Test cases for SchedulerFactory."""
+class TestModelTrainerFactory(unittest.TestCase):
+    """Test cases for ModelTrainerFactory."""
 
-    @patch("FastSurferCNN.utils.lr_scheduler.get_lr_scheduler")
-    def test_create_scheduler(self, mock_get_scheduler):
-        """Test scheduler creation."""
-        mock_scheduler = MagicMock()
-        mock_get_scheduler.return_value = mock_scheduler
-        
-        optimizer = MagicMock(spec=torch.optim.Optimizer)
+    @patch("di.factories.FastSurferCNN_FL_Trainer")
+    def test_create_model_trainer_fastsurfer(self, mock_trainer_class):
+        """Test FastSurfer trainer creation when FL wrapper is available."""
+        mock_trainer = MagicMock()
+        mock_trainer_class.return_value = mock_trainer
+
         cfg = MagicMock(spec=yacs.config.CfgNode)
-        factory = SchedulerFactory()
-        scheduler = factory.create_scheduler(optimizer, cfg)
-        
-        mock_get_scheduler.assert_called_once_with(optimizer, cfg)
-        self.assertEqual(scheduler, mock_scheduler)
+        factory = ModelTrainerFactory(cfg=cfg)
+        trainer = factory.create_model_trainer("FastSurferCNN")
+
+        mock_trainer_class.assert_called_once_with(cfg)
+        self.assertEqual(trainer, mock_trainer)
 
 
 if __name__ == "__main__":

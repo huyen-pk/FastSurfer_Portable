@@ -1,2 +1,2 @@
-[env]
-PROTOC = "/home/huyenpk/anaconda3/bin/protoc"
+# Configure PROTOC in your local shell, CI environment, or an untracked local cargo config.
+# Do not commit machine-specific absolute paths here.

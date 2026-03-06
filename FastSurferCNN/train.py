@@ -56,7 +56,7 @@ class Trainer:
         Directory where checkpoints are saved.
     device : torch.device
         Device to be used for training (CPU or GPU).
-        The neural network model being trained.
+    optimizer : torch.optim.Optimizer
         Optimizer used for training the model.
     loss_func : Callable
         Loss function used for training.

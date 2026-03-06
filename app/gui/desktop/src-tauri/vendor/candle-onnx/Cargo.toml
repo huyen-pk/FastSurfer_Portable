@@ -58,3 +58,6 @@ features = ["derive"]
 
 [build-dependencies.prost-build]
 version = "0.14.1"
+
+[build-dependencies.protoc-bin-vendored]
+version = "3"

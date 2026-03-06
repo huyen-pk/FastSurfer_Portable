@@ -12,82 +12,29 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Unit tests for DI device manager."""
+"""Unit tests for DI inference engine factory."""
 
+import os
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
-import torch
-
-from FastSurferCNN.di import DeviceManager
+from di.factories import InferenceEngineFactory
 
 
-class TestDeviceManager(unittest.TestCase):
-    """Test cases for DeviceManager."""
+class TestInferenceEngineFactory(unittest.TestCase):
+    """Test cases for InferenceEngineFactory."""
 
-    @patch("torch.cuda.is_available")
-    def test_device_manager_auto_cuda(self, mock_cuda_available):
-        """Test automatic CUDA device selection when available."""
-        mock_cuda_available.return_value = True
-        dm = DeviceManager()
-        device = dm.get_device()
-        self.assertEqual(device.type, "cuda")
+    @patch("di.factories.Inference")
+    def test_create_inference_engine_respects_disable_onnx(self, mock_inference):
+        """Test disabling ONNX forces PyTorch inference engine."""
+        cfg = MagicMock()
+        factory = InferenceEngineFactory()
 
-    @patch("torch.cuda.is_available")
-    def test_device_manager_auto_cpu(self, mock_cuda_available):
-        """Test automatic CPU device selection when CUDA unavailable."""
-        mock_cuda_available.return_value = False
-        dm = DeviceManager()
-        device = dm.get_device()
-        self.assertEqual(device.type, "cpu")
+        with patch.dict(os.environ, {"FASTSURFER_DISABLE_ONNX": "1"}, clear=False):
+            engine = factory.create_inference_engine(cfg)
 
-    def test_device_manager_explicit_device(self):
-        """Test explicit device specification."""
-        cpu_device = torch.device("cpu")
-        dm = DeviceManager(device=cpu_device)
-        device = dm.get_device()
-        self.assertEqual(device.type, "cpu")
-
-    @patch("torch.cuda.is_available")
-    def test_is_cuda_available(self, mock_cuda_available):
-        """Test CUDA availability check."""
-        mock_cuda_available.return_value = True
-        dm = DeviceManager()
-        self.assertTrue(dm.is_cuda_available())
-        
-        mock_cuda_available.return_value = False
-        self.assertFalse(dm.is_cuda_available())
-
-    @patch("torch.cuda.device_count")
-    def test_device_count(self, mock_device_count):
-        """Test device count method."""
-        mock_device_count.return_value = 2
-        dm = DeviceManager()
-        self.assertEqual(dm.device_count(), 2)
-
-    @patch("torch.cuda.device_count")
-    def test_is_parallel_capable_true(self, mock_device_count):
-        """Test parallel capability check when multiple devices available."""
-        mock_device_count.return_value = 2
-        cuda_device = torch.device("cuda")
-        dm = DeviceManager(device=cuda_device)
-        self.assertTrue(dm.is_parallel_capable())
-
-    @patch("torch.cuda.device_count")
-    def test_is_parallel_capable_false_single_device(self, mock_device_count):
-        """Test parallel capability check with single device."""
-        mock_device_count.return_value = 1
-        cuda_device = torch.device("cuda")
-        dm = DeviceManager(device=cuda_device)
-        self.assertFalse(dm.is_parallel_capable())
-
-    @patch("torch.cuda.device_count")
-    def test_is_parallel_capable_false_cpu(self, mock_device_count):
-        """Test parallel capability check with CPU device."""
-        mock_device_count.return_value = 2
-        cpu_device = torch.device("cpu")
-        dm = DeviceManager(device=cpu_device)
-        self.assertFalse(dm.is_parallel_capable())
+        self.assertEqual(engine, mock_inference.return_value)
+        mock_inference.assert_called_once()
 
 
 if __name__ == "__main__":
