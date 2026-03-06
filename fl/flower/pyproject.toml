@@ -1,0 +1,47 @@
+[project]
+name = "fastsurfer-flower"
+version = "0.1.0"
+description = "Flower federated training integration for FastSurferCNN"
+authors = ["@huyen-pk"]
+readme = "README.md"
+requires-python = ">=3.8"
+
+[tool.flwr.app.components]
+# Entrypoints called by `flwr run . --server` and `flwr run . --client`
+# Format: "module:function"
+server = "FastSurferCNN.federated.server:main"
+client = "FastSurferCNN.federated.client:main"
+
+[tool.flwr.app.config]
+num-server-rounds = 3
+batch-size = 32
+learning-rate = 0.01
+dataset-name = "nelorth/oxford-flowers"
+num-classes = 102
+fraction-evaluate = 1.0
+fraction-train = 1.0
+
+[tool.flwr.federations]
+default = "local-simulation"
+
+[tool.flwr.federations.local-simulation]
+options.num-supernodes = 10
+
+[tool.flwr.federations.local-simulation-gpu]
+options.num-supernodes = 10
+options.backend.client-resources.num-cpus = 2 # each ClientApp assumes to use 2CPUs
+options.backend.client-resources.num-gpus = 0.2 # at most 5 ClientApp will run in a given GPU
+
+# Application dependencies required at runtime by the Flower app
+# flwr will automatically try to install these when running the app
+dependencies = [
+  "flwr",
+  "torch",
+  "numpy",
+  "yacs",
+  "tqdm",
+  "matplotlib",
+]
+
+# Optional metadata for the app
+license = "Apache-2.0"

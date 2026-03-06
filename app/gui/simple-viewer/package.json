@@ -1,0 +1,33 @@
+{
+  "name": "simple-viewer",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test": "vitest run --config testing/vitest/vitest.config.ts",
+    "test:watch": "vitest --config testing/vitest/vitest.config.ts",
+    "test:e2e": "playwright test -c testing/e2e/playwright.config.ts",
+    "test:e2e:ci": "playwright test -c testing/e2e/playwright.ci.config.ts"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.56.0",
+    "@sveltejs/vite-plugin-svelte": "^6.2.1",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/svelte": "^5.2.8",
+    "jsdom": "^27.0.0",
+    "svelte": "^5.45.2",
+    "typescript": "^5.9.2",
+    "vite": "^7.3.1",
+    "vite-plugin-pwa": "^1.1.0",
+    "vitest": "^3.2.4"
+  },
+  "dependencies": {
+    "@niivue/niivue": "^0.67.0",
+    "@tauri-apps/api": "^2",
+    "@tauri-apps/plugin-dialog": "^2",
+    "@tauri-apps/plugin-process": "^2.3.1"
+  }
+}

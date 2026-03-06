@@ -1,0 +1,14 @@
+{
+  "name": "desktop",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "tauri": "tauri",
+    "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml",
+    "test:rust:ci": "mkdir -p testing/rust/results && cargo test --manifest-path src-tauri/Cargo.toml -- --nocapture 2>&1 | tee testing/rust/results/cargo-test.log"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2"
+  }
+}

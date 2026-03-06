@@ -2,8 +2,14 @@
 /tools/Docker/BUILD.info
 /tools/Docker/custom-ssl.crt
 /.idea/**
+/.vscode/
+**/.vscode/
 /rough_work/**
 /doc-build/**
+**/node_modules/
+
+# Model weights (tests)
+/onnx/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
@@ -16,3 +22,21 @@ __pycache__/
 fastsurfer.egg-info
 uv.lock
 /doc/api/generated/
+
+# Test artifacts
+junit-results.xml
+.pytest_cache/
+
+# Desktop app build artifacts
+/app/backend/build/
+/app/backend/dist/
+/app/gui/simple-viewer/dist/
+/app/gui/desktop/dist/
+/app/gui/desktop/backend/
+/app/gui/desktop/src-tauri/target/
+
+# Test output
+*/out/
+
+# Local/private environment files
+**/.env

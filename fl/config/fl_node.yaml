@@ -1,0 +1,10 @@
+FEDERATION:
+  ENABLED: false
+  BACKEND: "internal"
+  AGGREGATION: "turbo_aggregate"
+  TOPOLOGY: "asynchronous_decentralized_parallel_sgd"
+  SYNC_INTERVAL: 1
+  SILO_ID: ""
+  AGGREGATION_PREVIOUS_WEIGHT: 0.3
+  AGGREGATION_CURRENT_WEIGHT: 0.7
+

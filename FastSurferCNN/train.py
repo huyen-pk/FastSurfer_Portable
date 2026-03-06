@@ -18,6 +18,7 @@ import os
 import pprint
 import time
 from collections import defaultdict
+from typing import Optional
 
 import numpy as np
 import torch
@@ -44,6 +45,31 @@ logger = logging.getLogger(__name__)
 class Trainer:
     """
     Trainer for the networks.
+    
+    Attributes
+    -------
+    cfg: yacs.config.CfgNode
+        Configuration node containing all the settings for training.
+    model: torch.nn.Module
+        The neural network model being trained.
+    checkpoint_dir : str
+        Directory where checkpoints are saved.
+    device : torch.device
+        Device to be used for training (CPU or GPU).
+    optimizer : torch.optim.Optimizer
+        Optimizer used for training the model.
+    loss_func : Callable
+        Loss function used for training.
+    class_names : list
+        List of class names for the dataset.
+    subepoch : bool
+        Flag indicating whether subepoch training is enabled.
+    plot_dir : str
+        Directory where prediction plots are saved.
+    num_classes : int
+        Number of classes in the dataset.
+    a : str
+        Format string for logging class-wise metrics.
 
     Methods
     -------
@@ -57,7 +83,10 @@ class Trainer:
         Performs training loop.
     """
 
-    def __init__(self, cfg: yacs.config.CfgNode):
+    def __init__(
+        self,
+        cfg: yacs.config.CfgNode
+    ):
         """
         Construct Trainer object.
 
@@ -74,23 +103,65 @@ class Trainer:
         # Create the checkpoint dir.
         self.checkpoint_dir = cp.create_checkpoint_dir(cfg.LOG_DIR, cfg.EXPR_NUM)
         logging.setup_logging(os.path.join(cfg.LOG_DIR, "logs", cfg.EXPR_NUM + ".log"))
+        self.set_logger_format(cfg)
         logger.info("Training with config:")
         logger.info(pprint.pformat(cfg))
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.model = build_model(cfg)
-        self.loss_func = get_loss_func(cfg)
+        self.set_model(build_model(cfg))
+        self.set_loss_function(get_loss_func(cfg))
+        self.set_class_names(get_class_names(cfg.DATA.PLANE, cfg.DATA.CLASS_OPTIONS))
+        self.subepoch = False if self.cfg.TRAIN.BATCH_SIZE == 16 else True
 
-        # set up class names
-        self.class_names = get_class_names(cfg.DATA.PLANE, cfg.DATA.CLASS_OPTIONS)
+    def set_model(self, model: torch.nn.Module) -> None:
+        """
+        Set the model for the trainer.
 
-        # Set up logger format
+        Parameters
+        ----------
+        model : torch.nn.Module
+            The model to set.
+        """
+        self.model = model
+
+    def set_optimizer(self, optimizer: torch.optim.Optimizer) -> None:
+        """
+        Set the optimizer for the trainer.
+
+        Parameters
+        ----------
+        optimizer : torch.optim.Optimizer
+            The optimizer to set.
+        """
+        self.optimizer = optimizer
+    
+    def set_loss_function(self, loss_func) -> None:
+        """
+        Set the loss function for the trainer.
+
+        Parameters
+        ----------
+        loss_func
+            The loss function to set.
+        """
+        self.loss_func = loss_func
+
+    def set_class_names(self, class_names) -> None:
+        """
+        Set the class names for the trainer.
+
+        Parameters
+        ----------
+        class_names
+            The class names to set.
+        """
+        self.class_names = class_names
+
+    def set_logger_format(self, cfg) -> None:
         self.a = "{}\t" * (cfg.MODEL.NUM_CLASSES - 2) + "{}"
         self.num_classes = cfg.MODEL.NUM_CLASSES
         self.plot_dir = os.path.join(cfg.LOG_DIR, "pred", str(cfg.EXPR_NUM))
         os.makedirs(self.plot_dir, exist_ok=True)
-
-        self.subepoch = False if self.cfg.TRAIN.BATCH_SIZE == 16 else True
-
+    
     def train(
         self,
         train_loader: loader.DataLoader,
