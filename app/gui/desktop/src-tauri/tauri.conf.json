@@ -31,7 +31,8 @@
     ],
     "resources": [
       "../backend/main",
-      "../backend/_internal"
+      "../backend/_internal",
+      "resources/ort"
     ]
   }
 }

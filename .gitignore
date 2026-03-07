@@ -22,10 +22,13 @@ __pycache__/
 fastsurfer.egg-info
 uv.lock
 /doc/api/generated/
+app/gui/desktop/src-tauri/resources/
 
 # Test artifacts
 junit-results.xml
 .pytest_cache/
+*/out/
+/app/**/data/
 
 # Desktop app build artifacts
 /app/backend/build/
@@ -34,9 +37,10 @@ junit-results.xml
 /app/gui/desktop/dist/
 /app/gui/desktop/backend/
 /app/gui/desktop/src-tauri/target/
-
-# Test output
-*/out/
+/app/gui/desktop/src-tauri/testing/rust/results/parity_*/
+/app/gui/desktop/src-tauri/testing/rust/results/fastsurfer_ipc_out_*/
+/app/gui/desktop/src-tauri/.ort-runtime-cache/
+/app/gui/desktop/src-tauri/testing/rust/.~lock.inference_rewrite_module_mapping.csv#
 
 # Local/private environment files
 **/.env

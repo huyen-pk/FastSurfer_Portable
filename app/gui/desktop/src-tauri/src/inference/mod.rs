@@ -1,4 +1,5 @@
-pub mod onnx_loader;
+pub mod onnx_loader_candle;
+pub mod onnx_loader_ort;
 pub mod pipeline;
 pub mod postprocess;
 pub mod preprocess;

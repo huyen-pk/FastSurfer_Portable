@@ -1,4 +1,7 @@
 use nifti::{IntoNdArray, NiftiHeader, NiftiObject, ReaderOptions};
+use std::path::PathBuf;
+use std::process::Command;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum InferencePlane {
@@ -22,23 +25,107 @@ pub(crate) struct PreparedPlaneInput {
     pub slice_index: usize,
 }
 
-pub(crate) fn load_input_volume(path: &str) -> Result<InputVolume, String> {
+fn is_supported_native_input_path(path: &str) -> bool {
     let lower = path.to_ascii_lowercase();
-    if !(lower.ends_with(".nii") || lower.ends_with(".nii.gz")) {
+    lower.ends_with(".nii") || lower.ends_with(".nii.gz") || lower.ends_with(".mgz") || lower.ends_with(".mgh")
+}
+
+fn is_mgz_or_mgh_path(path: &str) -> bool {
+    let lower = path.to_ascii_lowercase();
+    lower.ends_with(".mgz") || lower.ends_with(".mgh")
+}
+
+fn to_temp_nifti_path() -> Result<PathBuf, String> {
+    let epoch_ns = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| format!("System clock error while creating temp NIfTI path: {error}"))?
+        .as_nanos();
+
+    Ok(std::env::temp_dir().join(format!("fastsurfer_native_input_{epoch_ns}.nii.gz")))
+}
+
+fn run_mri_convert(input_path: &str, output_path: &str) -> Result<(), String> {
+    let program = std::env::var("FASTSURFER_MRI_CONVERT_BIN").unwrap_or_else(|_| "mri_convert".to_string());
+    let status = Command::new(&program)
+        .arg(input_path)
+        .arg(output_path)
+        .status()
+        .map_err(|error| format!("Failed to execute '{program}' for MGZ conversion: {error}"))?;
+
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("'{program}' returned non-zero exit status during MGZ conversion"))
+    }
+}
+
+fn run_python_nibabel_convert(input_path: &str, output_path: &str) -> Result<(), String> {
+    let python_bin = std::env::var("FASTSURFER_PYTHON_BIN").unwrap_or_else(|_| "python3".to_string());
+    let script = [
+        "import nibabel as nib",
+        "import sys",
+        "img = nib.load(sys.argv[1])",
+        "nib.save(img, sys.argv[2])",
+    ]
+    .join("; ");
+
+    let status = Command::new(&python_bin)
+        .arg("-c")
+        .arg(script)
+        .arg(input_path)
+        .arg(output_path)
+        .status()
+        .map_err(|error| format!("Failed to execute '{python_bin}' for MGZ conversion: {error}"))?;
+
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("'{python_bin}' returned non-zero exit status during nibabel MGZ conversion"))
+    }
+}
+
+fn convert_mgz_to_nifti(input_path: &str) -> Result<PathBuf, String> {
+    let output_path = to_temp_nifti_path()?;
+    let output_str = output_path.to_string_lossy().to_string();
+
+    match run_mri_convert(input_path, &output_str) {
+        Ok(()) => return Ok(output_path),
+        Err(_error) => {}
+    }
+
+    run_python_nibabel_convert(input_path, &output_str).map(|_| output_path).map_err(|error| {
+        format!(
+            "Failed to convert MGZ/MGH input '{input_path}' to NIfTI. Tried mri_convert and python nibabel fallback. Last error: {error}"
+        )
+    })
+}
+
+pub(crate) fn load_input_volume(path: &str) -> Result<InputVolume, String> {
+    if !is_supported_native_input_path(path) {
         return Err(format!(
-            "Native Rust inference currently supports NIfTI input only (.nii/.nii.gz), got: {path}"
+            "Native Rust inference supports .nii/.nii.gz and .mgz/.mgh input, got: {path}"
         ));
     }
 
+    let mut converted_temp_file: Option<PathBuf> = None;
+    let load_path = if is_mgz_or_mgh_path(path) {
+        let converted = convert_mgz_to_nifti(path)?;
+        let converted_str = converted.to_string_lossy().to_string();
+        converted_temp_file = Some(converted);
+        converted_str
+    } else {
+        path.to_string()
+    };
+
     let obj = ReaderOptions::new()
-        .read_file(path)
-        .map_err(|error| format!("Failed to read NIfTI file '{path}': {error}"))?;
+        .read_file(&load_path)
+        .map_err(|error| format!("Failed to read NIfTI file '{}': {error}", load_path))?;
 
     let header = obj.header().clone();
     let volume = obj.into_volume();
     let array = volume
         .into_ndarray::<f32>()
-        .map_err(|error| format!("Failed to materialize NIfTI volume '{path}' as ndarray: {error}"))?;
+        .map_err(|error| format!("Failed to materialize NIfTI volume '{}' as ndarray: {error}", load_path))?;
 
     let shape = array.shape();
     if shape.len() < 3 {
@@ -58,6 +145,10 @@ pub(crate) fn load_input_volume(path: &str) -> Result<InputVolume, String> {
         .collect::<Vec<f32>>();
 
     let zoom_xyz = [header.pixdim[1], header.pixdim[2], header.pixdim[3]];
+
+    if let Some(temp_file) = converted_temp_file {
+        let _ = std::fs::remove_file(temp_file);
+    }
 
     Ok(InputVolume {
         data_xyz,

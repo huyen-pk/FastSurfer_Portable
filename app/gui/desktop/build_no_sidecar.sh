@@ -5,6 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 FRONTEND_DIST_DIR="$SCRIPT_DIR/../simple-viewer/dist"
+TAURI_NO_SIDECAR_CONFIG="$SCRIPT_DIR/src-tauri/tauri.no-sidecar.conf.json"
 
 if ! command -v npm >/dev/null 2>&1; then
   echo "npm is required but not found in PATH." >&2
@@ -17,9 +18,9 @@ if [[ ! -d "$FRONTEND_DIST_DIR" ]]; then
   exit 1
 fi
 
-if [[ -z "${FASTSURFER_ORT_RUNTIME_DIR:-}" && -z "${FASTSURFER_ORT_DYLIB_PATH:-}" ]]; then
-  echo "ORT runtime env not provided; build.rs will try auto-discovery/download." >&2
-  echo "Optional override: set FASTSURFER_ORT_RUNTIME_DIR or FASTSURFER_ORT_DYLIB_PATH." >&2
+if [[ ! -f "$TAURI_NO_SIDECAR_CONFIG" ]]; then
+  echo "Missing no-sidecar Tauri config override: $TAURI_NO_SIDECAR_CONFIG" >&2
+  exit 1
 fi
 
-npm run tauri build
+npm run tauri build -- --config src-tauri/tauri.no-sidecar.conf.json

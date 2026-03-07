@@ -103,6 +103,11 @@ if [[ "$TARGET_ENVIRONMENT" == "web" ]]; then
 fi
 
 if [[ "$TARGET_ENVIRONMENT" == "desktop" ]]; then
+  if [[ -z "${FASTSURFER_ORT_RUNTIME_DIR:-}" && -z "${FASTSURFER_ORT_DYLIB_PATH:-}" ]]; then
+    echo "Desktop build: ORT runtime env not provided; build.rs will try auto-download." >&2
+    echo "Optional override: set FASTSURFER_ORT_RUNTIME_DIR or FASTSURFER_ORT_DYLIB_PATH." >&2
+  fi
+
   echo "Building frontend (Svelte tauri target)..."
   "$FRONTEND_BUILD_SCRIPT" --target tauri
 

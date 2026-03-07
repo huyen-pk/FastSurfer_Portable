@@ -28,3 +28,6 @@ mod pre_inference_processing_tests;
 #[path = "controller_tests/post_inference_processing_tests.rs"]
 mod post_inference_processing_tests;
 
+#[path = "controller_tests/full_volume_parity_benchmark_tests.rs"]
+mod full_volume_parity_benchmark_tests;
+

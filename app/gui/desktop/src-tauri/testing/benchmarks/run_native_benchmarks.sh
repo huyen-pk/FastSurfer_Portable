@@ -50,7 +50,7 @@ timeout 120s env \
   FASTSURFER_NATIVE_TRACE_TIMING=0 \
   FASTSURFER_NATIVE_TRACE_NODES=1 \
   FASTSURFER_NATIVE_TRACE_NODE_MS=0 \
-  cargo test parity_native_rust_inference_with_golden_files_should_compare_without_python_runtime -- --ignored --nocapture \
+  cargo test parity_label_volume_ratio_rust_inference_with_golden_files_should_compare_without_python_runtime -- --ignored --nocapture \
   > "$LOG_DIR/native-node-trace-$TIMESTAMP.log" 2>&1
 TRACE_EXIT=$?
 set -e

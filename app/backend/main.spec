@@ -9,6 +9,7 @@ FASTSURFER_HIDDENIMPORTS = (
     collect_submodules('FastSurferCNN')
     + collect_submodules('di')
     + collect_submodules('fl')
+    + collect_submodules('numpy')
 )
 FASTSURFER_DATAS = (
     collect_data_files('FastSurferCNN')

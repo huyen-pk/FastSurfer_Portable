@@ -1,4 +1,5 @@
-use crate::inference::onnx_loader::NativeOnnxSessions;
+use crate::inference::onnx_loader_candle as candle_loader;
+use crate::inference::onnx_loader_ort as ort_loader;
 use crate::inference::postprocess::{
     derive_aseg_from_pred, derive_brainmask_from_pred, flip_wm_islands, mask_aseg_with_brainmask,
     split_cortex_labels,
@@ -17,6 +18,7 @@ use std::collections::{BTreeSet, HashMap};
 use std::io::{BufRead, BufReader};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter};
@@ -35,13 +37,174 @@ struct NativeSingleResult {
     qc_summary: String,
 }
 
+const NATIVE_CANCELLED_MESSAGE: &str = "Task cancelled by user.";
+
+fn cancelled_error() -> String {
+    NATIVE_CANCELLED_MESSAGE.to_string()
+}
+
+fn is_task_cancelled(
+    cancelled_tasks: &Arc<Mutex<BTreeSet<String>>>,
+    task_id: &str,
+) -> Result<bool, String> {
+    cancelled_tasks
+        .lock()
+        .map_err(|_| "Cancelled tasks mutex was poisoned".to_string())
+        .map(|set| set.contains(task_id))
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum NativeOnnxRuntime {
+    Candle,
+    Ort,
+}
+
+enum NativeOnnxSessions {
+    Candle(candle_loader::NativeOnnxSessions),
+    Ort(ort_loader::NativeOnnxSessions),
+}
+
+enum PlaneSessionRef<'a> {
+    Candle(&'a candle_loader::PlaneSession),
+    Ort(&'a ort_loader::PlaneSession),
+}
+
+struct PlaneRun {
+    logits: Vec<f32>,
+    shape_chw: [usize; 3],
+    output_shapes: Vec<Vec<usize>>,
+}
+
+fn resolve_native_onnx_runtime() -> NativeOnnxRuntime {
+    let raw = std::env::var("FASTSURFER_NATIVE_RUNTIME")
+        .unwrap_or_else(|_| "candle".to_string())
+        .trim()
+        .to_ascii_lowercase();
+
+    match raw.as_str() {
+        "ort" | "onnxruntime" | "onnx-runtime" => NativeOnnxRuntime::Ort,
+        _ => NativeOnnxRuntime::Candle,
+    }
+}
+
+impl NativeOnnxRuntime {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Candle => "candle",
+            Self::Ort => "ort",
+        }
+    }
+}
+
+impl NativeOnnxSessions {
+    fn runtime(&self) -> NativeOnnxRuntime {
+        match self {
+            Self::Candle(_) => NativeOnnxRuntime::Candle,
+            Self::Ort(_) => NativeOnnxRuntime::Ort,
+        }
+    }
+
+    fn load_default() -> Result<Self, String> {
+        match resolve_native_onnx_runtime() {
+            NativeOnnxRuntime::Candle => candle_loader::NativeOnnxSessions::load_default().map(Self::Candle),
+            NativeOnnxRuntime::Ort => ort_loader::NativeOnnxSessions::load_default().map(Self::Ort),
+        }
+    }
+
+    fn source_dir(&self) -> &str {
+        match self {
+            Self::Candle(models) => &models.registry.source_dir,
+            Self::Ort(models) => &models.registry.source_dir,
+        }
+    }
+
+    fn model_paths_summary(&self) -> String {
+        match self {
+            Self::Candle(models) => format!(
+                "axial='{}', coronal='{}', sagittal='{}'",
+                models.registry.axial_model_path,
+                models.registry.coronal_model_path,
+                models.registry.sagittal_model_path
+            ),
+            Self::Ort(models) => format!(
+                "axial='{}', coronal='{}', sagittal='{}'",
+                models.registry.axial_model_path,
+                models.registry.coronal_model_path,
+                models.registry.sagittal_model_path
+            ),
+        }
+    }
+
+    fn run_dummy_probe(&self) -> Result<Vec<String>, String> {
+        match self {
+            Self::Candle(models) => models.run_dummy_probe(),
+            Self::Ort(models) => models.run_dummy_probe(),
+        }
+    }
+
+    fn plane_session(&self, plane: InferencePlane) -> PlaneSessionRef<'_> {
+        match (self, plane) {
+            (Self::Candle(models), InferencePlane::Coronal) => PlaneSessionRef::Candle(&models.coronal),
+            (Self::Candle(models), InferencePlane::Axial) => PlaneSessionRef::Candle(&models.axial),
+            (Self::Candle(models), InferencePlane::Sagittal) => PlaneSessionRef::Candle(&models.sagittal),
+            (Self::Ort(models), InferencePlane::Coronal) => PlaneSessionRef::Ort(&models.coronal),
+            (Self::Ort(models), InferencePlane::Axial) => PlaneSessionRef::Ort(&models.axial),
+            (Self::Ort(models), InferencePlane::Sagittal) => PlaneSessionRef::Ort(&models.sagittal),
+        }
+    }
+
+    fn class_count_or_default(&self) -> usize {
+        let output_shapes = match self {
+            Self::Candle(models) => &models.coronal.output_shapes,
+            Self::Ort(models) => &models.coronal.output_shapes,
+        };
+
+        output_shapes
+            .first()
+            .and_then(|shape| shape.as_ref())
+            .and_then(|shape| shape.get(1).copied())
+            .unwrap_or(79usize)
+    }
+}
+
+impl PlaneSessionRef<'_> {
+    fn input_shape(&self) -> &Option<Vec<usize>> {
+        match self {
+            Self::Candle(session) => &session.input_shape,
+            Self::Ort(session) => &session.input_shape,
+        }
+    }
+
+    fn run(
+        &self,
+        input_shape: &[usize],
+        input_data: &[f32],
+        scale_factor: [f32; 2],
+        plane: &str,
+    ) -> Result<PlaneRun, String> {
+        match self {
+            Self::Candle(session) => {
+                let run = session.run(input_shape, input_data, scale_factor, plane)?;
+                Ok(PlaneRun {
+                    logits: run.logits,
+                    shape_chw: run.shape_chw,
+                    output_shapes: run.output_shapes,
+                })
+            }
+            Self::Ort(session) => {
+                let run = session.run(input_shape, input_data, scale_factor, plane)?;
+                Ok(PlaneRun {
+                    logits: run.logits,
+                    shape_chw: run.shape_chw,
+                    output_shapes: run.output_shapes,
+                })
+            }
+        }
+    }
+}
+
 fn discovery_summary(models: &NativeOnnxSessions) -> String {
-    format!(
-        "axial='{}', coronal='{}', sagittal='{}'",
-        models.registry.axial_model_path,
-        models.registry.coronal_model_path,
-        models.registry.sagittal_model_path
-    )
+    models.model_paths_summary()
 }
 
 fn session_channels_or_default(input_shape: &Option<Vec<usize>>) -> usize {
@@ -115,9 +278,11 @@ fn legacy_preprocessing_summary(models: &NativeOnnxSessions) -> String {
     let base_res = 1.0f32;
     let synthetic_zoom = [1.0f32, 1.0f32, 1.0f32];
 
-    let axial_channels = session_channels_or_default(&models.axial.input_shape);
-    let coronal_channels = session_channels_or_default(&models.coronal.input_shape);
-    let sagittal_channels = session_channels_or_default(&models.sagittal.input_shape);
+    let axial_channels = session_channels_or_default(models.plane_session(InferencePlane::Axial).input_shape());
+    let coronal_channels =
+        session_channels_or_default(models.plane_session(InferencePlane::Coronal).input_shape());
+    let sagittal_channels =
+        session_channels_or_default(models.plane_session(InferencePlane::Sagittal).input_shape());
 
     let axial = build_legacy_preprocessing_trace(
         InferencePlane::Axial,
@@ -149,13 +314,9 @@ fn run_single_plane_forward_at_slice(
 ) -> Result<PlaneForwardResult, String> {
     let trace_timing = native_trace_timing_enabled();
     let t0 = Instant::now();
-    let session = match plane {
-        InferencePlane::Coronal => &sessions.coronal,
-        InferencePlane::Axial => &sessions.axial,
-        InferencePlane::Sagittal => &sessions.sagittal,
-    };
+    let session = sessions.plane_session(plane);
 
-    let channel_count = session_channels_or_default(&session.input_shape);
+    let channel_count = session_channels_or_default(session.input_shape());
     let t_pre = Instant::now();
     let prepared = prepare_plane_input_for_slice(volume, plane, channel_count, 1.0, slice_index)?;
     let pre_elapsed = t_pre.elapsed();
@@ -458,7 +619,21 @@ fn create_native_output_dir() -> Result<PathBuf, String> {
         .map_err(|error| format!("System clock error while creating output directory: {error}"))?
         .as_nanos();
 
-    let output_dir = std::env::temp_dir().join(format!("fastsurfer_ipc_out_{epoch_ns}"));
+    let base_output_root = std::env::var("FASTSURFER_NATIVE_OUTPUT_ROOT")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir);
+
+    fs::create_dir_all(&base_output_root).map_err(|error| {
+        format!(
+            "Failed to create output root directory '{}': {error}",
+            base_output_root.display()
+        )
+    })?;
+
+    let output_dir = base_output_root.join(format!("fastsurfer_ipc_out_{epoch_ns}"));
     fs::create_dir_all(&output_dir).map_err(|error| {
         format!(
             "Failed to create output directory '{}': {error}",
@@ -471,7 +646,10 @@ fn create_native_output_dir() -> Result<PathBuf, String> {
 
 fn is_supported_nifti_path(path: &Path) -> bool {
     let lower = path.to_string_lossy().to_ascii_lowercase();
-    lower.ends_with(".nii") || lower.ends_with(".nii.gz")
+    lower.ends_with(".nii")
+        || lower.ends_with(".nii.gz")
+        || lower.ends_with(".mgz")
+        || lower.ends_with(".mgh")
 }
 
 fn collect_nifti_files_recursive(dir: &Path, out: &mut Vec<String>) {
@@ -630,11 +808,16 @@ fn run_native_single_path<F>(
     sessions: &NativeOnnxSessions,
     lut_ids: &[u16],
     input_path: &str,
+    should_cancel: &dyn Fn() -> bool,
     mut on_progress: F,
 ) -> Result<NativeSingleResult, String>
 where
     F: FnMut(u8, String),
 {
+    if should_cancel() {
+        return Err(cancelled_error());
+    }
+
     on_progress(2, "Loading input volume...".to_string());
     let volume = load_input_volume(input_path)?;
 
@@ -653,17 +836,14 @@ where
         return Err("Input volume has zero slices after orientation transforms".to_string());
     }
 
-    let coronal_channels = session_channels_or_default(&sessions.coronal.input_shape);
-    let axial_channels = session_channels_or_default(&sessions.axial.input_shape);
-    let sagittal_channels = session_channels_or_default(&sessions.sagittal.input_shape);
+    let coronal_channels =
+        session_channels_or_default(sessions.plane_session(InferencePlane::Coronal).input_shape());
+    let axial_channels =
+        session_channels_or_default(sessions.plane_session(InferencePlane::Axial).input_shape());
+    let sagittal_channels =
+        session_channels_or_default(sessions.plane_session(InferencePlane::Sagittal).input_shape());
 
-    let class_count = sessions
-        .coronal
-        .output_shapes
-        .first()
-        .and_then(|shape| shape.as_ref())
-        .and_then(|shape| shape.get(1).copied())
-        .unwrap_or(79usize);
+    let class_count = sessions.class_count_or_default();
 
     let sparse_mode = parse_native_slices_per_plane().is_some();
 
@@ -711,6 +891,10 @@ where
     let use_sparse_parallel = sparse_mode && native_sparse_parallel_enabled();
 
     if use_sparse_parallel {
+        if should_cancel() {
+            return Err(cancelled_error());
+        }
+
         on_progress(5, "Running sparse per-plane ONNX forward passes...".to_string());
 
         let mut plane_results = Vec::<(InferencePlane, f32, Vec<PlaneForwardResult>)>::new();
@@ -770,12 +954,20 @@ where
         })?;
 
         for (plane, weight, results_for_plane) in plane_results {
+            if should_cancel() {
+                return Err(cancelled_error());
+            }
+
             if let Some(first) = results_for_plane.first() {
                 plane_first_summaries.push(first.summary.clone());
             }
 
             let slice_count = results_for_plane.len();
             for (position, plane_result) in results_for_plane.iter().enumerate() {
+                if should_cancel() {
+                    return Err(cancelled_error());
+                }
+
                 merge_plane_logits_into_sparse_volume(
                     &mut merged_logits,
                     plane_result,
@@ -803,6 +995,10 @@ where
         }
     } else {
         for (plane, slice_indices, _channels, weight) in plane_specs {
+            if should_cancel() {
+                return Err(cancelled_error());
+            }
+
             if slice_indices.is_empty() {
                 continue;
             }
@@ -814,6 +1010,10 @@ where
 
             let slice_count = slice_indices.len();
             for (position, slice_index) in slice_indices.into_iter().enumerate() {
+                if should_cancel() {
+                    return Err(cancelled_error());
+                }
+
                 let plane_result = run_single_plane_forward_at_slice(sessions, &volume, plane, slice_index)?;
 
                 let plane_result = if plane == InferencePlane::Sagittal {
@@ -871,6 +1071,10 @@ where
                 }
             }
         }
+    }
+
+    if should_cancel() {
+        return Err(cancelled_error());
     }
 
     on_progress(92, "Converting logits to label volume...".to_string());
@@ -933,8 +1137,9 @@ where
     if native_trace_timing_enabled() {
         let probe = sessions.run_dummy_probe()?;
         eprintln!(
-            "[trace][native-inference] loaded ONNX sessions from {} ({}) | probe={} | preproc={} | input='{}' | {} | classes={} voxels={} top_classes=[{}] output='{}'",
-            sessions.registry.source_dir,
+            "[trace][native-inference] runtime={} loaded ONNX sessions from {} ({}) | probe={} | preproc={} | input='{}' | {} | classes={} voxels={} top_classes=[{}] output='{}'",
+            sessions.runtime().as_str(),
+            sessions.source_dir(),
             discovery_summary(sessions),
             probe.join(" | "),
             legacy_preprocessing_summary(sessions),
@@ -999,7 +1204,7 @@ fn validate_inputs(file_paths: &[String], folder_paths: &[String]) -> Result<Vec
 
     if resolved.is_empty() {
         return Err(
-            "Rust native inference requires at least one valid NIfTI path (.nii/.nii.gz) from files or folders."
+            "Rust native inference requires at least one valid input path (.nii/.nii.gz/.mgz/.mgh) from files or folders."
                 .to_string(),
         );
     }
@@ -1023,7 +1228,13 @@ pub(crate) fn run_native_inference(
     let mut qc_summaries = Vec::new();
 
     for input_path in &requested_paths {
-        let single = run_native_single_path(&sessions, &lut_ids, input_path, |_progress, _message| {})?;
+        let single = run_native_single_path(
+            &sessions,
+            &lut_ids,
+            input_path,
+            &|| false,
+            |_progress, _message| {},
+        )?;
         result_directories.insert(single.result_directory);
         qc_summaries.push(single.qc_summary);
         results.push(single.prediction);
@@ -1051,6 +1262,7 @@ pub(crate) fn run_native_inference(
 
 pub(crate) fn run_native_inference_with_progress(
     app_handle: &AppHandle,
+    cancelled_tasks: &Arc<Mutex<BTreeSet<String>>>,
     task_id: &str,
     file_paths: &[String],
     folder_paths: &[String],
@@ -1082,7 +1294,10 @@ pub(crate) fn run_native_inference_with_progress(
         InferenceProgressEvent {
             task_id: task_id.to_string(),
             status: "started".to_string(),
-            message: "Rust ONNX mode selected. Initializing ONNX sessions...".to_string(),
+            message: format!(
+                "Rust ONNX mode selected (runtime={}). Initializing ONNX sessions...",
+                resolve_native_onnx_runtime().as_str()
+            ),
             total,
             completed: 0,
             progress: 0,
@@ -1136,7 +1351,38 @@ pub(crate) fn run_native_inference_with_progress(
     let mut qc_summaries = Vec::new();
 
     for (index, input_path) in requested_paths.iter().enumerate() {
-        let single = run_native_single_path(&sessions, &lut_ids, input_path, |file_progress, file_message| {
+        if is_task_cancelled(cancelled_tasks, task_id)? {
+            let _ = app_handle.emit(
+                "fastsurfer://inference-progress",
+                InferenceProgressEvent {
+                    task_id: task_id.to_string(),
+                    status: "cancelled".to_string(),
+                    message: NATIVE_CANCELLED_MESSAGE.to_string(),
+                    total,
+                    completed: index,
+                    progress: if total == 0 {
+                        0
+                    } else {
+                        (((index * 100) / total).min(100)) as u8
+                    },
+                    current_path: Some(input_path.clone()),
+                    output_path: None,
+                },
+            );
+            if let Ok(mut cancelled) = cancelled_tasks.lock() {
+                cancelled.remove(task_id);
+            }
+            return Err(cancelled_error());
+        }
+
+        let should_cancel = || {
+            cancelled_tasks
+                .lock()
+                .map(|set| set.contains(task_id))
+                .unwrap_or(false)
+        };
+
+        let single = run_native_single_path(&sessions, &lut_ids, input_path, &should_cancel, |file_progress, file_message| {
             let overall_progress = if total == 0 {
                 file_progress
             } else {
@@ -1187,11 +1433,34 @@ pub(crate) fn run_native_inference_with_progress(
                 );
             }
             Err(error) => {
+                let was_cancelled = error == NATIVE_CANCELLED_MESSAGE || is_task_cancelled(cancelled_tasks, task_id)?;
                 let progress = if total == 0 {
                     0
                 } else {
                     (((index * 100) / total).min(100)) as u8
                 };
+
+                if was_cancelled {
+                    let _ = app_handle.emit(
+                        "fastsurfer://inference-progress",
+                        InferenceProgressEvent {
+                            task_id: task_id.to_string(),
+                            status: "cancelled".to_string(),
+                            message: NATIVE_CANCELLED_MESSAGE.to_string(),
+                            total,
+                            completed: index,
+                            progress,
+                            current_path: Some(input_path.clone()),
+                            output_path: None,
+                        },
+                    );
+
+                    if let Ok(mut cancelled) = cancelled_tasks.lock() {
+                        cancelled.remove(task_id);
+                    }
+
+                    return Err(cancelled_error());
+                }
 
                 let _ = app_handle.emit(
                     "fastsurfer://inference-progress",
@@ -1210,6 +1479,10 @@ pub(crate) fn run_native_inference_with_progress(
                 return Err(error);
             }
         }
+    }
+
+    if let Ok(mut cancelled) = cancelled_tasks.lock() {
+        cancelled.remove(task_id);
     }
 
     let result_directories = result_directories.into_iter().collect::<Vec<String>>();

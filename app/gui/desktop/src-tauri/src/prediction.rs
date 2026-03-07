@@ -325,12 +325,18 @@ pub async fn run_fastsurfer_inference_with_progress(
         folder_paths.len()
     );
     if app_state.inference_engine == InferenceEngine::RustOnnx {
-        return run_native_inference_with_progress(
-            &app_handle,
-            &task_id,
-            &file_paths,
-            &folder_paths,
-        );
+        let cancelled_tasks = app_state.cancelled_tasks.clone();
+        return tauri::async_runtime::spawn_blocking(move || {
+            run_native_inference_with_progress(
+                &app_handle,
+                &cancelled_tasks,
+                &task_id,
+                &file_paths,
+                &folder_paths,
+            )
+        })
+        .await
+        .map_err(|e| format!("Failed to join native inference task: {e}"))?;
     }
 
     let backend = app_state.backend.clone();

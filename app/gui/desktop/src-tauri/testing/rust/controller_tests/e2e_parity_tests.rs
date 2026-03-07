@@ -11,9 +11,26 @@ use crate::process_mgmt::{
     load_desktop_env, resolve_backend_launch_command_from, resolve_python_executable,
 };
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+fn test_run_timestamp() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0)
+}
+
+fn create_timestamped_results_dir(repo_root: &Path, prefix: &str) -> Result<PathBuf, String> {
+    let root = repo_root.join("app/gui/desktop/src-tauri/testing/rust/results");
+    fs::create_dir_all(&root)
+        .map_err(|error| format!("failed to create rust test results root '{}': {error}", root.display()))?;
+    let run_dir = root.join(format!("{}_{}", prefix, test_run_timestamp()));
+    fs::create_dir_all(&run_dir)
+        .map_err(|error| format!("failed to create test run dir '{}': {error}", run_dir.display()))?;
+    Ok(run_dir)
+}
 
 #[test]
 #[ignore = "Runs real FastSurfer inference via python IPC server and test data"]
@@ -252,7 +269,7 @@ fn parity_native_rust_inference_with_test_data_should_generate_output_and_compar
 
 #[test]
 #[ignore = "Runs Rust-only parity check against precomputed golden NIfTI files in testing/data/.tmp_e2e_output_py"]
-fn parity_native_rust_inference_with_golden_files_should_compare_without_python_runtime() {
+fn parity_label_volume_ratio_rust_inference_with_golden_files_should_compare_without_python_runtime() {
     let Some(repo_root) = find_repo_root() else {
         panic!("failed to locate repo root for native golden parity test");
     };
@@ -290,6 +307,16 @@ fn parity_native_rust_inference_with_golden_files_should_compare_without_python_
         .filter(|value| *value > 0)
         .unwrap_or(60);
 
+    let run_dir = create_timestamped_results_dir(&repo_root, "parity_label_volume_ratio_one_slice")
+        .expect("failed to create timestamped one-slice parity results directory");
+
+    unsafe {
+        std::env::set_var(
+            "FASTSURFER_NATIVE_OUTPUT_ROOT",
+            run_dir.to_string_lossy().to_string(),
+        );
+    }
+
     let native_result = run_native_inference_with_timeout(
         &[input_nii.to_string_lossy().to_string()],
         &[],
@@ -306,6 +333,14 @@ fn parity_native_rust_inference_with_golden_files_should_compare_without_python_
         rust_pred.exists(),
         "native rust output not found: {}",
         rust_pred.display()
+    );
+
+    let _ = fs::copy(&input_nii, run_dir.join("subject140_input_native.nii.gz"));
+    let _ = fs::copy(&golden_pred, run_dir.join("python_pred_golden.nii.gz"));
+
+    eprintln!(
+        "[parity][one-slice] artifacts: {}",
+        run_dir.display()
     );
 
     compare_label_volumes_per_plane_single_slice_in_rust(&rust_pred, &golden_pred, 0.25)
