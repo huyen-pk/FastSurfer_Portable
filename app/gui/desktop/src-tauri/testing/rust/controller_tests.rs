@@ -1,5 +1,4 @@
 // This test suite integrates with test-containers for environment isolation.
-// This test suite integrates with test-containers for environment isolation.
 #[path = "controller_tests/support.rs"]
 mod support;
 
@@ -33,5 +32,5 @@ mod post_inference_processing_tests;
 #[path = "controller_tests/full_volume_parity_benchmark_tests.rs"]
 mod full_volume_parity_benchmark_tests;
 
-#[path = "controller_tests/native_progress_behavior_test.rs"]
+#[path = "../bdd/native_progress_behavior_test.rs"]
 mod native_progress_behavior_test;
