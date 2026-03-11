@@ -1,3 +1,6 @@
+#[deprecated = r#"Switching to native inference mode in Rust, so this Python subprocess management code is no longer used. 
+    Keeping it around for now in case we need to reference it for the native implementation, 
+    but it will likely be removed in the future."#]
 use crate::utils::first_existing_path;
 use std::fs;
 use std::io::BufReader;

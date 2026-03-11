@@ -1,0 +1,33 @@
+Global:
+- git pre-commit hook linter for ts and rust
+- Pre-commit hook rejecting mock imports (anti mock testing)
+- Test containers
+- audit agents: Adversarial Testing
+- precommit hook for assertion density verification
+
+
+
+Svelte:
+- Replace hardcoded command strings with string constants
+- Implement state management for tasks (context api, store)
+
+
+
+Tauri:
+- use string constants instead of hardcoded strings (variables)
+- process_mgmt.rs is deprecated as moving to native inference in Rust, keep it around for benchmarking between Rust and Python.
+- backend.rs to be updated to support different inference engines (currently candle and ort)
+- backend types in process_mgmt.rs to be moved to backend.rs
+- support.rs to be moved to benchmarking module as most code supports parity tests (spawn child python process, resolves dependencies, 
+files conversion, parity tests):
+=> TODO: check the parity tests if they actually compare anything (correct comparison)
+=> TODO: check if generation functions produce stages output that match Python pipelines.
+=> TODO: run_native_inference_with_timeout => check the blocking code that threading is done correctly (replace with tokio?)
+
+- pipeline.rs
+=> resolve_native_onnx_runtime() use environment variable which requires setting it up when start application, this won't work 
+when bundle up application for user to install.
+=> legacy_preprocessing_summary()
+
+
+- use named variables in string interpolations when there more than 3 arguments

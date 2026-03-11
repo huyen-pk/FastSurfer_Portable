@@ -981,7 +981,7 @@ class SubjectList:
         str
             The suffix the entries share.
         """
-        suffix = self._subjects[0]
+        suffix = str(self._subjects[0])
         for subject_path in self._subjects[1:]:
             subj = str(subject_path)
             if subj.endswith(suffix):
@@ -992,6 +992,7 @@ class SubjectList:
                 if subj[i:] == suffix[i:]:
                     suffix = suffix[i:]
                     break
+        
         return suffix
 
     def are_all_subject_files(self):

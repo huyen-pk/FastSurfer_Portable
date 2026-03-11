@@ -46,7 +46,7 @@ from numpy import typing as npt
 import FastSurferCNN.reduce_to_aseg as rta
 from FastSurferCNN.data_loader import data_utils as du
 from FastSurferCNN.data_loader.conform import conform, is_conform, orientation_to_ornts, to_target_orientation
-from FastSurferCNN.inference import Inference
+from FastSurferCNN.inference_onnx import InferenceONNX as Inference
 from FastSurferCNN.quick_qc import check_volume
 from FastSurferCNN.utils import PLANES, Plane, logging, nibabelImage, parser_defaults
 from FastSurferCNN.utils.arg_types import OrientationType, VoxSizeOption

@@ -176,6 +176,7 @@ class MultiScaleDataset(Dataset):
         # Open file in reading mode
         start = time.time()
         with h5py.File(dataset_path, "r") as hf:
+            print("Available keys in the dataset: ", list(hf.keys()))
             for size in cfg.DATA.SIZES:
                 try:
                     logger.info(f"Processing images of size {size}.")

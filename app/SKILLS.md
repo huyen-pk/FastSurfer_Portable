@@ -57,7 +57,7 @@ Primary targets in this repo:
 - Tauri/Rust command logic is in `app/gui/desktop/src-tauri/src/lib.rs`.
 - Keep command handlers thin and move testable logic into helper functions.
 - If adding controller logic, ensure it is unit-testable without launching full Tauri runtime.
-- Rust tests should live in `app/gui/desktop/testing/rust`.
+- Rust tests should live in `app/gui/desktop/src-tauri/testing/rust`.
 
 ---
 
@@ -110,6 +110,13 @@ Use behavior-driven names:
 
 One behavior per test case.
 
+### Real Dependencies & Anti-Mocking Policy
+
+- **MANDATORY**: All tests must use **real dependencies** or **containerized services** (e.g., `testcontainers`).
+- **PROHIBITED**: Using mock libraries (Vitest `vi.mock`, Python `unittest.mock`, etc.) or custom "Fake" implementations is strictly forbidden. 
+- **Reasoning**: To ensure tests validate real system behavior and integration, avoiding the brittleness of mocked interfaces.
+- **Local Dev**: Tests should fail (not skip) if environment dependencies are missing.
+
 ### `simple-viewer` Tests
 
 Location:
@@ -130,7 +137,7 @@ Outputs:
 ### `desktop` Rust Controller Tests
 
 Location:
-- `app/gui/desktop/testing/rust/controller_tests.rs`
+- `app/gui/desktop/src-tauri/testing/rust/controller_tests.rs`
 
 Commands (from `app/gui/desktop`):
 - Local Rust tests: `npm run test:rust`

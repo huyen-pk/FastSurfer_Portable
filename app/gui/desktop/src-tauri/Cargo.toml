@@ -45,3 +45,13 @@ harness = false
 
 [profile.test]
 opt-level = 3
+
+[lints.rust]
+# Promote common warnings to hard errors
+unsafe_code = "deny"
+unused_imports = "deny"
+
+[lints.clippy]
+# Treat clippy warnings as hard errors
+all = "warn"
+pedantic = "warn" # This is the "strict mode"

@@ -146,6 +146,8 @@ class InferenceONNX(Inference):
         """
         if device is None:
             self.device = self.default_device
+        else:
+            self.device = device
 
         # Load the ONNX model and create an inference session
         import onnxruntime as ort
@@ -305,8 +307,12 @@ class InferenceONNX(Inference):
         if out is None:
             out = init_pred.detach().clone()
         log_batch_idx = None
+        logger.info("Inference with ONNX model")
+        logger.info("predii shape: %s", pred_ii)
+        logger.info("Target shape: %s", target_shape)
         with logging_redirect_tqdm():
             try:
+                
                 for batch_idx, batch in tqdm(enumerate(val_loader), total=len(val_loader), unit="batch"):
                     log_batch_idx = batch_idx
                     # move data to the model device
@@ -318,14 +324,14 @@ class InferenceONNX(Inference):
                         "scale_factor": scale_factors.detach().cpu().numpy(),
                         "scale_factor_out": out_scale
                     }
-                    # 3. Run prediction
+                    # Run prediction
                     outputs = session.run(None, input_data)
                     # 'outputs' is a list of results matching your output_names
                     logits = outputs[0]
                     # print("Original Prediction shape:", out.shape)
                     pred = torch.tensor(logits).to(self.device)
-                    print("Prediction shape:", pred.shape)
-                    print("Logits shape:", logits.shape)
+                    logger.info("Prediction shape: %s", pred.shape)
+                    logger.info("Logits shape: %s", logits.shape)
             
                     batch_size = pred.shape[0]
                     end_index = start_index + batch_size
@@ -335,14 +341,16 @@ class InferenceONNX(Inference):
                         pred = map_prediction_sagittal2full(pred, num_classes=self.get_num_classes(), lut=self.lut)
 
                     # permute the prediction into the out slice order
+                    # a.k.a rearrange the output dimensions of 2D slices so that they match their position on the original 3D volume.
                     pred = pred.permute(*self.permute_order[plane]).to(out.device)  # the to-operation is implicit
 
                     # cut prediction to the image size
                     pred = pred[pred_ii]
 
                     # add prediction logits into the output (same as multiplying probabilities)
-                    ii[index_of_current_plane] = slice(start_index, end_index)
-                    out[tuple(ii)].add_(pred.half(), alpha=self.alpha.get(plane, 0.4))
+                    ii[index_of_current_plane] = slice(start_index, end_index) # indexing the current batch (slab) in the output tensor
+                    # select a slab of the output tensor and add the current batch prediction to it
+                    out[tuple(ii)].add_(pred.half(), alpha=self.alpha.get(plane, 0.4)) # pred.half() => halving precision
                     start_index = end_index
 
             except:

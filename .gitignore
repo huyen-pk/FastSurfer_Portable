@@ -43,4 +43,5 @@ junit-results.xml
 /app/gui/desktop/src-tauri/testing/rust/.~lock.inference_rewrite_module_mapping.csv#
 
 # Local/private environment files
-**/.env
+**/.env.worktrees/
+.worktrees/

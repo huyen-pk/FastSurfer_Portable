@@ -15,7 +15,7 @@ fn main() {
         panic!("ORT runtime staging failed: {error}");
     }
 
-    tauri_build::build()
+    tauri_build::build();
 }
 
 fn stage_ort_runtime() -> Result<(), String> {
@@ -77,9 +77,8 @@ fn stage_ort_runtime() -> Result<(), String> {
             continue;
         }
 
-        let file_name = match path.file_name().and_then(OsStr::to_str) {
-            Some(value) => value,
-            None => continue,
+        let Some(file_name) = path.file_name().and_then(OsStr::to_str) else {
+            continue;
         };
 
         if !is_ort_runtime_file(file_name) {
@@ -103,13 +102,12 @@ fn stage_ort_runtime() -> Result<(), String> {
             runtime_dir.display(),
             expected_runtime_hint()
         ));
-    } else {
-        println!(
-            "cargo:warning=staged {copied} ORT runtime file(s) from '{}' into '{}'",
-            runtime_dir.display(),
-            out_dir.display()
-        );
     }
+    println!(
+        "cargo:warning=staged {copied} ORT runtime file(s) from '{}' into '{}'",
+        runtime_dir.display(),
+        out_dir.display()
+    );
 
     Ok(())
 }
@@ -157,8 +155,7 @@ fn resolve_ort_runtime_dir() -> Result<PathBuf, String> {
     }
 
     let download_root = env::var_os("FASTSURFER_ORT_DOWNLOAD_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| manifest_dir.join(".ort-runtime-cache"));
+        .map_or_else(|| manifest_dir.join(".ort-runtime-cache"), PathBuf::from);
 
     let runtime_dir = download_ort_runtime_if_missing(&download_root)?;
     if dir_contains_runtime_files(&runtime_dir)? {
@@ -215,7 +212,7 @@ fn download_ort_runtime_if_missing(download_root: &std::path::Path) -> Result<Pa
         )
     })?;
 
-    let (file_name, default_url, is_zip) = ort_download_spec(&version)?;
+    let (file_name, default_url, is_zip) = ort_download_spec(&version);
     let url = env::var("FASTSURFER_ORT_DOWNLOAD_URL").unwrap_or(default_url);
     let archive_path = download_root.join(platform).join(&version).join(file_name);
 
@@ -238,8 +235,7 @@ fn download_ort_runtime_if_missing(download_root: &std::path::Path) -> Result<Pa
 
     if !curl_status.success() {
         return Err(format!(
-            "failed to download ORT runtime from '{url}' (curl exit: {})",
-            curl_status
+            "failed to download ORT runtime from '{url}' (curl exit: {curl_status})"
         ));
     }
 
@@ -313,14 +309,14 @@ fn find_runtime_dir_with_libs(root: &std::path::Path) -> Result<Option<PathBuf>,
     Ok(None)
 }
 
-fn ort_download_spec(version: &str) -> Result<(&'static str, String, bool), String> {
+fn ort_download_spec(version: &str) -> (&'static str, String, bool) {
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
     {
         let file_name = "onnxruntime-linux-x64.tgz";
         let url = format!(
             "https://github.com/microsoft/onnxruntime/releases/download/v{version}/onnxruntime-linux-x64-{version}.tgz"
         );
-        Ok((file_name, url, false))
+        (file_name, url, false)
     }
 
     #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
@@ -329,7 +325,7 @@ fn ort_download_spec(version: &str) -> Result<(&'static str, String, bool), Stri
         let url = format!(
             "https://github.com/microsoft/onnxruntime/releases/download/v{version}/onnxruntime-osx-x86_64-{version}.tgz"
         );
-        return Ok((file_name, url, false));
+        (file_name, url, false)
     }
 
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
@@ -338,7 +334,7 @@ fn ort_download_spec(version: &str) -> Result<(&'static str, String, bool), Stri
         let url = format!(
             "https://github.com/microsoft/onnxruntime/releases/download/v{version}/onnxruntime-osx-arm64-{version}.tgz"
         );
-        return Ok((file_name, url, false));
+        (file_name, url, false)
     }
 
     #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
@@ -347,7 +343,7 @@ fn ort_download_spec(version: &str) -> Result<(&'static str, String, bool), Stri
         let url = format!(
             "https://github.com/microsoft/onnxruntime/releases/download/v{version}/onnxruntime-win-x64-{version}.zip"
         );
-        Ok((file_name, url, true))
+        (file_name, url, true)
     }
 
     #[cfg(not(any(
@@ -357,10 +353,7 @@ fn ort_download_spec(version: &str) -> Result<(&'static str, String, bool), Stri
         all(target_os = "windows", target_arch = "x86_64")
     )))]
     {
-        Err(
-            "automatic ORT runtime download is not configured for this target platform/arch"
-                .to_string(),
-        )
+        panic!("automatic ORT runtime download is not configured for this target platform/arch")
     }
 }
 

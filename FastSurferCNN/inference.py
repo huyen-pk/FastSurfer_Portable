@@ -344,6 +344,7 @@ class Inference:
         if out is None:
             out = init_pred.detach().clone()
         log_batch_idx = None
+        logger.info("Inference normal mode")
         with logging_redirect_tqdm():
             try:
                 for batch_idx, batch in tqdm(enumerate(val_loader), total=len(val_loader), unit="batch"):
@@ -361,14 +362,16 @@ class Inference:
                         pred = map_prediction_sagittal2full(pred, num_classes=self.get_num_classes(), lut=self.lut)
 
                     # permute the prediction into the out slice order
+                    # a.k.a rearrange the output dimensions of 2D slices so that they match their position on the original 3D volume.
                     pred = pred.permute(*self.permute_order[plane]).to(out.device)  # the to-operation is implicit
 
                     # cut prediction to the image size
-                    pred = pred[pred_ii]
+                    pred = pred[pred_ii] # apply slicing to the first three dimensions of the prediction tensor, which correspond to the spatial dimensions of the output volume and keeps the last dimension (classes) intact.
 
                     # add prediction logits into the output (same as multiplying probabilities)
-                    ii[index_of_current_plane] = slice(start_index, end_index)
-                    out[tuple(ii)].add_(pred.half(), alpha=self.alpha.get(plane, 0.4))
+                    ii[index_of_current_plane] = slice(start_index, end_index) # indexing the current batch (slab) in the output tensor
+                    # select a slab of the output tensor and add the current batch prediction to it
+                    out[tuple(ii)].add_(pred.half(), alpha=self.alpha.get(plane, 0.4)) # pred.half() => halving precision
                     start_index = end_index
 
             except:
@@ -377,6 +380,10 @@ class Inference:
             else:
                 logger.info(f"Inference on {log_batch_idx + 1} batches for {plane} successful")
 
+        # Output logits are aggregated (addition) in batches of plane slices, init by output from the previous plane.
+        # this is in turn will be init value for the next plane.
+        # as seen from the top of the function, computation is done sequentially by batches and by planes.
+        # opportunity for parallelization: we could compute the planes in parallel and then aggregate them at the end, but this would require more memory and a different aggregation strategy (e.g. weighted average instead of addition).
         return out
 
     @torch.no_grad()

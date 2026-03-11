@@ -272,6 +272,55 @@ nib.save(img, sys.argv[2])
     Ok(())
 }
 
+fn load_nifti_labels_as_i32(path: &Path) -> Result<(Vec<i32>, Vec<usize>), String> {
+    let obj = ReaderOptions::new()
+        .read_file(path)
+        .map_err(|error| format!("failed to read NIfTI '{}': {error}", path.display()))?;
+
+    let volume = obj.into_volume();
+    let array = volume.into_ndarray::<f32>().map_err(|error| {
+        format!(
+            "failed to convert NIfTI '{}' into ndarray: {error}",
+            path.display()
+        )
+    })?;
+
+    let shape = array.shape().to_vec();
+    let labels = array
+        .iter()
+        .map(|value| value.round() as i32)
+        .collect::<Vec<i32>>();
+
+    Ok((labels, shape))
+}
+
+pub(super) fn ensure_native_input_nifti(
+    repo_root: &Path,
+    python_bin: &str,
+) -> Result<PathBuf, String> {
+    let fixture_dir = repo_root.join("app/gui/desktop/src-tauri/testing/data/.tmp_e2e_output_py");
+    fs::create_dir_all(&fixture_dir).map_err(|error| {
+        format!(
+            "failed to create fixture directory '{}': {error}",
+            fixture_dir.display()
+        )
+    })?;
+
+    let input_nii = fixture_dir.join("140_orig.native_input.nii.gz");
+    if input_nii.exists() {
+        return Ok(input_nii);
+    }
+
+    let input_mgz =
+        repo_root.join("app/gui/desktop/src-tauri/testing/data/Subject140/140_orig.mgz");
+    if !input_mgz.exists() {
+        return Err(format!("missing test input file: {}", input_mgz.display()));
+    }
+
+    convert_mgz_to_nii_gz(python_bin, &input_mgz, &input_nii)?;
+    Ok(input_nii)
+}
+
 pub(super) fn compare_label_volumes_with_python(
     python_bin: &str,
     rust_pred: &Path,
@@ -321,28 +370,6 @@ if ratio > 0.25:
     }
 
     Ok(())
-}
-
-fn load_nifti_labels_as_i32(path: &Path) -> Result<(Vec<i32>, Vec<usize>), String> {
-    let obj = ReaderOptions::new()
-        .read_file(path)
-        .map_err(|error| format!("failed to read NIfTI '{}': {error}", path.display()))?;
-
-    let volume = obj.into_volume();
-    let array = volume.into_ndarray::<f32>().map_err(|error| {
-        format!(
-            "failed to convert NIfTI '{}' into ndarray: {error}",
-            path.display()
-        )
-    })?;
-
-    let shape = array.shape().to_vec();
-    let labels = array
-        .iter()
-        .map(|value| value.round() as i32)
-        .collect::<Vec<i32>>();
-
-    Ok((labels, shape))
 }
 
 pub(super) fn compare_label_volumes_per_plane_single_slice_in_rust(
@@ -449,33 +476,6 @@ pub(super) fn compare_label_volumes_per_plane_single_slice_in_rust(
     }
 
     Ok(())
-}
-
-pub(super) fn ensure_native_input_nifti(
-    repo_root: &Path,
-    python_bin: &str,
-) -> Result<PathBuf, String> {
-    let fixture_dir = repo_root.join("app/gui/desktop/src-tauri/testing/data/.tmp_e2e_output_py");
-    fs::create_dir_all(&fixture_dir).map_err(|error| {
-        format!(
-            "failed to create fixture directory '{}': {error}",
-            fixture_dir.display()
-        )
-    })?;
-
-    let input_nii = fixture_dir.join("140_orig.native_input.nii.gz");
-    if input_nii.exists() {
-        return Ok(input_nii);
-    }
-
-    let input_mgz =
-        repo_root.join("app/gui/desktop/src-tauri/testing/data/Subject140/140_orig.mgz");
-    if !input_mgz.exists() {
-        return Err(format!("missing test input file: {}", input_mgz.display()));
-    }
-
-    convert_mgz_to_nii_gz(python_bin, &input_mgz, &input_nii)?;
-    Ok(input_nii)
 }
 
 pub(super) fn compare_preprocess_slice_with_python(
