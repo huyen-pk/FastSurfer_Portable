@@ -29,6 +29,10 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "resources": []
+    "resources": [
+      "../backend/main",
+      "../backend/_internal",
+      "resources/ort"
+    ]
   }
 }

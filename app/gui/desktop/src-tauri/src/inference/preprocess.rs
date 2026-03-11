@@ -10,6 +10,7 @@ pub(crate) enum InferencePlane {
     Sagittal,
 }
 
+#[derive(Clone)]
 pub(crate) struct InputVolume {
     pub data_xyz: Vec<f32>,
     pub shape_xyz: [usize; 3],
@@ -27,7 +28,10 @@ pub(crate) struct PreparedPlaneInput {
 
 fn is_supported_native_input_path(path: &str) -> bool {
     let lower = path.to_ascii_lowercase();
-    lower.ends_with(".nii") || lower.ends_with(".nii.gz") || lower.ends_with(".mgz") || lower.ends_with(".mgh")
+    lower.ends_with(".nii")
+        || lower.ends_with(".nii.gz")
+        || lower.ends_with(".mgz")
+        || lower.ends_with(".mgh")
 }
 
 fn is_mgz_or_mgh_path(path: &str) -> bool {
@@ -45,7 +49,8 @@ fn to_temp_nifti_path() -> Result<PathBuf, String> {
 }
 
 fn run_mri_convert(input_path: &str, output_path: &str) -> Result<(), String> {
-    let program = std::env::var("FASTSURFER_MRI_CONVERT_BIN").unwrap_or_else(|_| "mri_convert".to_string());
+    let program =
+        std::env::var("FASTSURFER_MRI_CONVERT_BIN").unwrap_or_else(|_| "mri_convert".to_string());
     let status = Command::new(&program)
         .arg(input_path)
         .arg(output_path)
@@ -55,12 +60,15 @@ fn run_mri_convert(input_path: &str, output_path: &str) -> Result<(), String> {
     if status.success() {
         Ok(())
     } else {
-        Err(format!("'{program}' returned non-zero exit status during MGZ conversion"))
+        Err(format!(
+            "'{program}' returned non-zero exit status during MGZ conversion"
+        ))
     }
 }
 
 fn run_python_nibabel_convert(input_path: &str, output_path: &str) -> Result<(), String> {
-    let python_bin = std::env::var("FASTSURFER_PYTHON_BIN").unwrap_or_else(|_| "python3".to_string());
+    let python_bin =
+        std::env::var("FASTSURFER_PYTHON_BIN").unwrap_or_else(|_| "python3".to_string());
     let script = [
         "import nibabel as nib",
         "import sys",
@@ -80,7 +88,9 @@ fn run_python_nibabel_convert(input_path: &str, output_path: &str) -> Result<(),
     if status.success() {
         Ok(())
     } else {
-        Err(format!("'{python_bin}' returned non-zero exit status during nibabel MGZ conversion"))
+        Err(format!(
+            "'{python_bin}' returned non-zero exit status during nibabel MGZ conversion"
+        ))
     }
 }
 
@@ -123,9 +133,12 @@ pub(crate) fn load_input_volume(path: &str) -> Result<InputVolume, String> {
 
     let header = obj.header().clone();
     let volume = obj.into_volume();
-    let array = volume
-        .into_ndarray::<f32>()
-        .map_err(|error| format!("Failed to materialize NIfTI volume '{}' as ndarray: {error}", load_path))?;
+    let array = volume.into_ndarray::<f32>().map_err(|error| {
+        format!(
+            "Failed to materialize NIfTI volume '{}' as ndarray: {error}",
+            load_path
+        )
+    })?;
 
     let shape = array.shape();
     if shape.len() < 3 {

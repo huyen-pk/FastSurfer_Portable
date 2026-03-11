@@ -1,7 +1,8 @@
+// This test suite integrates with test-containers for environment isolation.
 use super::support::{
     compare_label_volumes_per_plane_single_slice_in_rust, compare_label_volumes_with_python,
     compare_preprocess_slice_with_python, configured_slice_indices, convert_mgz_to_nii_gz,
-    create_backend_state_from_process, ensure_native_input_nifti, find_repo_root, is_ci,
+    create_backend_state_via_process, ensure_native_input_nifti, find_repo_root, is_ci,
     python_has_fastsurfer_runtime, python_has_nibabel_runtime, resolve_python_with_nibabel,
     run_native_inference_with_timeout,
 };
@@ -24,11 +25,19 @@ fn test_run_timestamp() -> u128 {
 
 fn create_timestamped_results_dir(repo_root: &Path, prefix: &str) -> Result<PathBuf, String> {
     let root = repo_root.join("app/gui/desktop/src-tauri/testing/rust/results");
-    fs::create_dir_all(&root)
-        .map_err(|error| format!("failed to create rust test results root '{}': {error}", root.display()))?;
+    fs::create_dir_all(&root).map_err(|error| {
+        format!(
+            "failed to create rust test results root '{}': {error}",
+            root.display()
+        )
+    })?;
     let run_dir = root.join(format!("{}_{}", prefix, test_run_timestamp()));
-    fs::create_dir_all(&run_dir)
-        .map_err(|error| format!("failed to create test run dir '{}': {error}", run_dir.display()))?;
+    fs::create_dir_all(&run_dir).map_err(|error| {
+        format!(
+            "failed to create test run dir '{}': {error}",
+            run_dir.display()
+        )
+    })?;
     Ok(run_dir)
 }
 
@@ -70,12 +79,11 @@ fn run_fastsurfer_inference_with_test_data_should_produce_output_file() {
         launch_cmd.env("PYTHONPATH", repo_root.to_string_lossy().to_string());
     }
 
-    let child = launch_cmd
-        .spawn()
-        .expect("failed to spawn backend process");
+    let child = launch_cmd.spawn().expect("failed to spawn backend process");
 
-    let backend = create_backend_state_from_process(child);
-    let input_path = repo_root.join("app/gui/desktop/src-tauri/testing/data/Subject140/140_orig.mgz");
+    let backend = create_backend_state_via_process(child);
+    let input_path =
+        repo_root.join("app/gui/desktop/src-tauri/testing/data/Subject140/140_orig.mgz");
     assert!(
         input_path.exists(),
         "test input file not found: {}",
@@ -134,12 +142,11 @@ fn predict_single_path_with_test_data_should_emit_progress_events() {
         launch_cmd.env("PYTHONPATH", repo_root.to_string_lossy().to_string());
     }
 
-    let child = launch_cmd
-        .spawn()
-        .expect("failed to spawn backend process");
+    let child = launch_cmd.spawn().expect("failed to spawn backend process");
 
-    let backend = create_backend_state_from_process(child);
-    let input_path = repo_root.join("app/gui/desktop/src-tauri/testing/data/Subject140/140_orig.mgz");
+    let backend = create_backend_state_via_process(child);
+    let input_path =
+        repo_root.join("app/gui/desktop/src-tauri/testing/data/Subject140/140_orig.mgz");
     assert!(
         input_path.exists(),
         "test input file not found: {}",
@@ -192,7 +199,8 @@ fn parity_native_rust_inference_with_test_data_should_generate_output_and_compar
         return;
     }
 
-    let input_mgz = repo_root.join("app/gui/desktop/src-tauri/testing/data/Subject140/140_orig.mgz");
+    let input_mgz =
+        repo_root.join("app/gui/desktop/src-tauri/testing/data/Subject140/140_orig.mgz");
     assert!(
         input_mgz.exists(),
         "test input file not found: {}",
@@ -212,7 +220,10 @@ fn parity_native_rust_inference_with_test_data_should_generate_output_and_compar
     );
 
     unsafe {
-        std::env::set_var("FASTSURFER_REPO_ROOT", repo_root.to_string_lossy().to_string());
+        std::env::set_var(
+            "FASTSURFER_REPO_ROOT",
+            repo_root.to_string_lossy().to_string(),
+        );
     }
     let native_result = run_native_inference_with_timeout(
         &[input_nii.to_string_lossy().to_string()],
@@ -251,7 +262,7 @@ fn parity_native_rust_inference_with_test_data_should_generate_output_and_compar
         .spawn()
         .expect("failed to spawn backend process for parity comparison");
 
-    let backend = create_backend_state_from_process(child);
+    let backend = create_backend_state_via_process(child);
     let py_result = run_fastsurfer_inference_with_backend(
         &backend,
         &[input_mgz.to_string_lossy().to_string()],
@@ -259,9 +270,16 @@ fn parity_native_rust_inference_with_test_data_should_generate_output_and_compar
     )
     .expect("expected python backend inference call to succeed");
 
-    assert!(!py_result.results.is_empty(), "expected at least one python result");
+    assert!(
+        !py_result.results.is_empty(),
+        "expected at least one python result"
+    );
     let py_pred = PathBuf::from(&py_result.results[0].output_path);
-    assert!(py_pred.exists(), "python output not found: {}", py_pred.display());
+    assert!(
+        py_pred.exists(),
+        "python output not found: {}",
+        py_pred.display()
+    );
 
     compare_label_volumes_with_python(&python_bin, &rust_pred, &py_pred)
         .expect("failed comparing rust output volume to python output volume");
@@ -269,7 +287,8 @@ fn parity_native_rust_inference_with_test_data_should_generate_output_and_compar
 
 #[test]
 #[ignore = "Runs Rust-only parity check against precomputed golden NIfTI files in testing/data/.tmp_e2e_output_py"]
-fn parity_label_volume_ratio_rust_inference_with_golden_files_should_compare_without_python_runtime() {
+fn parity_label_volume_ratio_rust_inference_with_golden_files_should_compare_without_python_runtime()
+ {
     let Some(repo_root) = find_repo_root() else {
         panic!("failed to locate repo root for native golden parity test");
     };
@@ -288,7 +307,10 @@ fn parity_label_volume_ratio_rust_inference_with_golden_files_should_compare_wit
     }
 
     unsafe {
-        std::env::set_var("FASTSURFER_REPO_ROOT", repo_root.to_string_lossy().to_string());
+        std::env::set_var(
+            "FASTSURFER_REPO_ROOT",
+            repo_root.to_string_lossy().to_string(),
+        );
         std::env::set_var("FASTSURFER_NATIVE_SLICES_PER_PLANE", "1");
         if std::env::var("FASTSURFER_NATIVE_TRACE_TIMING").is_err() {
             std::env::set_var("FASTSURFER_NATIVE_TRACE_TIMING", "0");
@@ -338,10 +360,7 @@ fn parity_label_volume_ratio_rust_inference_with_golden_files_should_compare_wit
     let _ = fs::copy(&input_nii, run_dir.join("subject140_input_native.nii.gz"));
     let _ = fs::copy(&golden_pred, run_dir.join("python_pred_golden.nii.gz"));
 
-    eprintln!(
-        "[parity][one-slice] artifacts: {}",
-        run_dir.display()
-    );
+    eprintln!("[parity][one-slice] artifacts: {}", run_dir.display());
 
     compare_label_volumes_per_plane_single_slice_in_rust(&rust_pred, &golden_pred, 0.25)
         .expect("failed comparing rust output to golden python output on 1 slice per plane");
@@ -368,7 +387,11 @@ fn parity_native_preprocess_should_match_python_for_planes_edge_and_center_slice
     let num_channels = 7usize;
     let base_res = 1.0f32;
 
-    for plane in [InferencePlane::Coronal, InferencePlane::Axial, InferencePlane::Sagittal] {
+    for plane in [
+        InferencePlane::Coronal,
+        InferencePlane::Axial,
+        InferencePlane::Sagittal,
+    ] {
         let [_, _, slices] = transformed_volume_shape(volume.shape_xyz, plane);
         assert!(
             slices > 0,

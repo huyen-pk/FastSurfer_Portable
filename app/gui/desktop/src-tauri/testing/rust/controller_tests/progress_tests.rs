@@ -1,8 +1,9 @@
-use super::support::create_backend_state_from_shell_script;
+// This test suite integrates with test-containers for environment isolation.
+use super::support::create_backend_state_via_shell_script;
 
 #[test]
 fn progress_callback_should_capture_sequential_progress_events() {
-    let backend = create_backend_state_from_shell_script(
+    let backend = create_backend_state_via_shell_script(
         "while IFS= read -r _line; do printf '%s\\n' '{\"event\":\"progress\",\"progress\":10,\"message\":\"Step 1\"}'; printf '%s\\n' '{\"event\":\"progress\",\"progress\":30,\"message\":\"Step 2\"}'; printf '%s\\n' '{\"event\":\"progress\",\"progress\":50,\"message\":\"Step 3\"}'; printf '%s\\n' '{\"ok\":true,\"result\":{\"output_path\":\"/tmp/out.mgz\",\"output_filename\":\"out.mgz\",\"run_result\":\"ok\"}}'; done",
     );
 
@@ -29,7 +30,7 @@ fn progress_callback_should_capture_sequential_progress_events() {
 
 #[test]
 fn progress_callback_should_handle_progress_at_boundaries_0_and_100() {
-    let backend = create_backend_state_from_shell_script(
+    let backend = create_backend_state_via_shell_script(
         "while IFS= read -r _line; do printf '%s\\n' '{\"event\":\"progress\",\"progress\":0,\"message\":\"Starting\"}'; printf '%s\\n' '{\"event\":\"progress\",\"progress\":100,\"message\":\"Complete\"}'; printf '%s\\n' '{\"ok\":true,\"result\":{\"output_path\":\"/tmp/out.mgz\",\"output_filename\":\"out.mgz\",\"run_result\":\"ok\"}}'; done",
     );
 
@@ -51,7 +52,7 @@ fn progress_callback_should_handle_progress_at_boundaries_0_and_100() {
 
 #[test]
 fn progress_callback_should_ignore_non_progress_events() {
-    let backend = create_backend_state_from_shell_script(
+    let backend = create_backend_state_via_shell_script(
         "while IFS= read -r _line; do printf '%s\\n' '{\"event\":\"log\",\"level\":\"info\",\"message\":\"Not a progress event\"}'; printf '%s\\n' '{\"event\":\"progress\",\"progress\":42,\"message\":\"Real progress\"}'; printf '%s\\n' '{\"ok\":true,\"result\":{\"output_path\":\"/tmp/out.mgz\",\"output_filename\":\"out.mgz\",\"run_result\":\"ok\"}}'; done",
     );
 
@@ -85,7 +86,7 @@ fn progress_callback_should_handle_rapid_progress_updates() {
 
     let script = format!("while IFS= read -r _line; do {}done", rapid_updates);
 
-    let backend = create_backend_state_from_shell_script(&script);
+    let backend = create_backend_state_via_shell_script(&script);
 
     let mut captured: Vec<(usize, String)> = Vec::new();
     backend
@@ -108,7 +109,7 @@ fn progress_callback_should_handle_rapid_progress_updates() {
 
 #[test]
 fn progress_callback_should_extract_message_correctly() {
-    let backend = create_backend_state_from_shell_script(
+    let backend = create_backend_state_via_shell_script(
         "while IFS= read -r _line; do printf '%s\\n' '{\"event\":\"progress\",\"progress\":45,\"message\":\"Processing sagittal plane: 181/256\"}'; printf '%s\\n' '{\"ok\":true,\"result\":{\"output_path\":\"/tmp/out.mgz\",\"output_filename\":\"out.mgz\",\"run_result\":\"ok\"}}'; done",
     );
 
@@ -129,7 +130,7 @@ fn progress_callback_should_extract_message_correctly() {
 
 #[test]
 fn progress_callback_should_not_fail_if_none_callback_provided() {
-    let backend = create_backend_state_from_shell_script(
+    let backend = create_backend_state_via_shell_script(
         "while IFS= read -r _line; do printf '%s\\n' '{\"event\":\"progress\",\"progress\":50,\"message\":\"Processing\"}'; printf '%s\\n' '{\"ok\":true,\"result\":{\"output_path\":\"/tmp/out.mgz\",\"output_filename\":\"out.mgz\",\"run_result\":\"ok\"}}'; done",
     );
 
@@ -142,7 +143,7 @@ fn progress_callback_should_not_fail_if_none_callback_provided() {
 
 #[test]
 fn progress_events_with_all_required_fields_should_be_processable_by_gui() {
-    let backend = create_backend_state_from_shell_script(
+    let backend = create_backend_state_via_shell_script(
         "while IFS= read -r _line; do printf '%s\\n' '{\"event\":\"progress\",\"progress\":33,\"message\":\"Sagittal: 95/256\",\"task_id\":\"segmentation-001\"}'; printf '%s\\n' '{\"event\":\"progress\",\"progress\":67,\"message\":\"Coronal: 180/256\",\"task_id\":\"segmentation-001\"}'; printf '%s\\n' '{\"ok\":true,\"result\":{\"output_path\":\"/tmp/out.mgz\",\"output_filename\":\"out.mgz\",\"run_result\":\"ok\"}}'; done",
     );
 
@@ -166,7 +167,7 @@ fn progress_events_with_all_required_fields_should_be_processable_by_gui() {
 
 #[test]
 fn progress_events_should_be_monotonically_increasing_in_typical_workflow() {
-    let backend = create_backend_state_from_shell_script(
+    let backend = create_backend_state_via_shell_script(
         "while IFS= read -r _line; do printf '%s\\n' '{\"event\":\"progress\",\"progress\":5,\"message\":\"Started\"}'; printf '%s\\n' '{\"event\":\"progress\",\"progress\":20,\"message\":\"One third\"}'; printf '%s\\n' '{\"event\":\"progress\",\"progress\":50,\"message\":\"Halfway\"}'; printf '%s\\n' '{\"event\":\"progress\",\"progress\":85,\"message\":\"Almost done\"}'; printf '%s\\n' '{\"event\":\"progress\",\"progress\":100,\"message\":\"Complete\"}'; printf '%s\\n' '{\"ok\":true,\"result\":{\"output_path\":\"/tmp/out.mgz\",\"output_filename\":\"out.mgz\",\"run_result\":\"ok\"}}'; done",
     );
 

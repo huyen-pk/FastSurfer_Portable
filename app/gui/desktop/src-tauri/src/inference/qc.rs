@@ -59,7 +59,8 @@ pub(crate) fn evaluate_qc(
                                 continue;
                             }
 
-                            let nidx = ((nx as usize) * sy * sz) + ((ny as usize) * sz) + (nz as usize);
+                            let nidx =
+                                ((nx as usize) * sy * sz) + ((ny as usize) * sz) + (nz as usize);
                             if labels_xyz[nidx] == 0 {
                                 touches_bg = true;
                                 break;

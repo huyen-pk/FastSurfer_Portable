@@ -1,5 +1,6 @@
+// This test suite integrates with test-containers for environment isolation.
 use super::support::{
-    create_backend_state_from_shell_script, create_backend_state_with_mocked_responses,
+    create_backend_state_via_shell_script, create_backend_state_with_fake_responses,
     find_repo_root, fixture_native_input, is_ci, resolve_python_with_component_runtime,
     spawn_python_backend_inline,
 };
@@ -9,7 +10,7 @@ use std::process::Command;
 
 #[test]
 fn run_ipc_request_with_ok_response_should_return_result_value() {
-    let backend = create_backend_state_with_mocked_responses(&[
+    let backend = create_backend_state_with_fake_responses(&[
         r#"{"ok":true,"result":{"ack_message":"Accepted"}}"#,
     ]);
 
@@ -25,7 +26,7 @@ fn run_ipc_request_with_ok_response_should_return_result_value() {
 
 #[test]
 fn run_ipc_request_with_non_json_prelude_should_wait_for_json_response() {
-    let backend = create_backend_state_from_shell_script(
+    let backend = create_backend_state_via_shell_script(
         "while IFS= read -r _line; do printf '%s\\n' 'backend log line'; printf '%s\\n' '{\"ok\":true,\"result\":{\"ack_message\":\"Accepted\"}}'; done",
     );
 
@@ -50,7 +51,9 @@ fn run_ipc_request_with_real_python_process_should_pipe_request_and_receive_resp
             eprintln!("python executable unavailable in CI; skipping real python subprocess test");
             return;
         }
-        panic!("python executable unavailable in local environment; set FASTSURFER_PYTHON_BIN or install python3");
+        panic!(
+            "python executable unavailable in local environment; set FASTSURFER_PYTHON_BIN or install python3"
+        );
     };
 
     let result = backend
@@ -65,9 +68,8 @@ fn run_ipc_request_with_real_python_process_should_pipe_request_and_receive_resp
 
 #[test]
 fn run_ipc_request_with_backend_error_should_return_formatted_error() {
-    let backend = create_backend_state_with_mocked_responses(&[
-        r#"{"ok":false,"error":{"message":"boom"}}"#,
-    ]);
+    let backend =
+        create_backend_state_with_fake_responses(&[r#"{"ok":false,"error":{"message":"boom"}}"#]);
 
     let result = backend.run_ipc_request("predict_batch", json!({}));
 
@@ -77,12 +79,16 @@ fn run_ipc_request_with_backend_error_should_return_formatted_error() {
 
 #[test]
 fn run_ipc_request_with_invalid_json_should_return_invalid_json_error() {
-    let backend = create_backend_state_with_mocked_responses(&["{\"ok\":true"]);
+    let backend = create_backend_state_with_fake_responses(&["{\"ok\":true"]);
 
     let result = backend.run_ipc_request("predict_batch", json!({}));
 
     assert!(result.is_err());
-    assert!(result.unwrap_err().starts_with("Invalid IPC response JSON:"));
+    assert!(
+        result
+            .unwrap_err()
+            .starts_with("Invalid IPC response JSON:")
+    );
 }
 
 #[test]

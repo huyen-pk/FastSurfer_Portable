@@ -29,7 +29,10 @@ fn stage_ort_runtime() -> Result<(), String> {
     }
 
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").map_err(|e| e.to_string())?);
-    let out_dir = manifest_dir.join("resources").join("ort").join(platform_folder());
+    let out_dir = manifest_dir
+        .join("resources")
+        .join("ort")
+        .join(platform_folder());
 
     if runtime_dir == out_dir {
         if dir_contains_runtime_files(&out_dir)? {
@@ -46,15 +49,27 @@ fn stage_ort_runtime() -> Result<(), String> {
     }
 
     if out_dir.exists() {
-        fs::remove_dir_all(&out_dir)
-            .map_err(|e| format!("failed to clear staged ORT dir '{}': {e}", out_dir.display()))?;
+        fs::remove_dir_all(&out_dir).map_err(|e| {
+            format!(
+                "failed to clear staged ORT dir '{}': {e}",
+                out_dir.display()
+            )
+        })?;
     }
-    fs::create_dir_all(&out_dir)
-        .map_err(|e| format!("failed to create staged ORT dir '{}': {e}", out_dir.display()))?;
+    fs::create_dir_all(&out_dir).map_err(|e| {
+        format!(
+            "failed to create staged ORT dir '{}': {e}",
+            out_dir.display()
+        )
+    })?;
 
     let mut copied = 0usize;
-    let entries = fs::read_dir(&runtime_dir)
-        .map_err(|e| format!("failed to read ORT runtime dir '{}': {e}", runtime_dir.display()))?;
+    let entries = fs::read_dir(&runtime_dir).map_err(|e| {
+        format!(
+            "failed to read ORT runtime dir '{}': {e}",
+            runtime_dir.display()
+        )
+    })?;
 
     for entry in entries.flatten() {
         let path = entry.path();
@@ -133,7 +148,10 @@ fn resolve_ort_runtime_dir() -> Result<PathBuf, String> {
         ));
     }
 
-    let bundled = manifest_dir.join("resources").join("ort").join(platform_folder());
+    let bundled = manifest_dir
+        .join("resources")
+        .join("ort")
+        .join(platform_folder());
     if dir_contains_runtime_files(&bundled)? {
         return Ok(bundled);
     }
@@ -147,16 +165,14 @@ fn resolve_ort_runtime_dir() -> Result<PathBuf, String> {
         return Ok(runtime_dir);
     }
 
-    Err(
-        format!(
-            "unable to resolve ORT runtime. Set FASTSURFER_ORT_RUNTIME_DIR/FASTSURFER_ORT_DYLIB_PATH, or allow auto-download to '{}'. Expected {}",
-            download_root.display(),
-            expected_runtime_hint()
-        ),
-    )
+    Err(format!(
+        "unable to resolve ORT runtime. Set FASTSURFER_ORT_RUNTIME_DIR/FASTSURFER_ORT_DYLIB_PATH, or allow auto-download to '{}'. Expected {}",
+        download_root.display(),
+        expected_runtime_hint()
+    ))
 }
 
-fn dir_contains_runtime_files(dir: &PathBuf) -> Result<bool, String> {
+fn dir_contains_runtime_files(dir: &std::path::Path) -> Result<bool, String> {
     if !dir.exists() || !dir.is_dir() {
         return Ok(false);
     }
@@ -179,7 +195,7 @@ fn dir_contains_runtime_files(dir: &PathBuf) -> Result<bool, String> {
     Ok(false)
 }
 
-fn download_ort_runtime_if_missing(download_root: &PathBuf) -> Result<PathBuf, String> {
+fn download_ort_runtime_if_missing(download_root: &std::path::Path) -> Result<PathBuf, String> {
     let version = env::var("FASTSURFER_ORT_VERSION").unwrap_or_else(|_| "1.23.2".to_string());
     let platform = platform_folder();
     let runtime_dir = download_root.join(platform).join(&version).join("runtime");
@@ -267,7 +283,7 @@ fn download_ort_runtime_if_missing(download_root: &PathBuf) -> Result<PathBuf, S
     ))
 }
 
-fn find_runtime_dir_with_libs(root: &PathBuf) -> Result<Option<PathBuf>, String> {
+fn find_runtime_dir_with_libs(root: &std::path::Path) -> Result<Option<PathBuf>, String> {
     if dir_contains_runtime_files(root)? {
         return Ok(Some(root.to_path_buf()));
     }
@@ -304,7 +320,7 @@ fn ort_download_spec(version: &str) -> Result<(&'static str, String, bool), Stri
         let url = format!(
             "https://github.com/microsoft/onnxruntime/releases/download/v{version}/onnxruntime-linux-x64-{version}.tgz"
         );
-        return Ok((file_name, url, false));
+        Ok((file_name, url, false))
     }
 
     #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
@@ -331,7 +347,7 @@ fn ort_download_spec(version: &str) -> Result<(&'static str, String, bool), Stri
         let url = format!(
             "https://github.com/microsoft/onnxruntime/releases/download/v{version}/onnxruntime-win-x64-{version}.zip"
         );
-        return Ok((file_name, url, true));
+        Ok((file_name, url, true))
     }
 
     #[cfg(not(any(
@@ -341,7 +357,10 @@ fn ort_download_spec(version: &str) -> Result<(&'static str, String, bool), Stri
         all(target_os = "windows", target_arch = "x86_64")
     )))]
     {
-        Err("automatic ORT runtime download is not configured for this target platform/arch".to_string())
+        Err(
+            "automatic ORT runtime download is not configured for this target platform/arch"
+                .to_string(),
+        )
     }
 }
 

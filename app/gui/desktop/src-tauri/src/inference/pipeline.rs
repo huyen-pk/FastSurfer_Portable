@@ -5,8 +5,8 @@ use crate::inference::postprocess::{
     split_cortex_labels,
 };
 use crate::inference::preprocess::{
-    InferencePlane, InputVolume, build_legacy_preprocessing_trace, load_input_volume, oriented_to_xyz,
-    prepare_plane_input_for_slice, transformed_volume_shape,
+    InferencePlane, InputVolume, build_legacy_preprocessing_trace, load_input_volume,
+    oriented_to_xyz, prepare_plane_input_for_slice, transformed_volume_shape,
 };
 use crate::inference::qc::evaluate_qc;
 use crate::models::{
@@ -15,13 +15,13 @@ use crate::models::{
 use ndarray::Array3;
 use nifti::writer::WriterOptions;
 use std::collections::{BTreeSet, HashMap};
-use std::io::{BufRead, BufReader};
 use std::fs;
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::thread;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
-use tauri::{AppHandle, Emitter};
+use tauri::Emitter;
+use tokio::sync::mpsc;
 
 #[derive(Clone)]
 struct PlaneForwardResult {
@@ -59,6 +59,7 @@ enum NativeOnnxRuntime {
     Ort,
 }
 
+#[derive(Clone)]
 enum NativeOnnxSessions {
     Candle(candle_loader::NativeOnnxSessions),
     Ort(ort_loader::NativeOnnxSessions),
@@ -106,7 +107,9 @@ impl NativeOnnxSessions {
 
     fn load_default() -> Result<Self, String> {
         match resolve_native_onnx_runtime() {
-            NativeOnnxRuntime::Candle => candle_loader::NativeOnnxSessions::load_default().map(Self::Candle),
+            NativeOnnxRuntime::Candle => {
+                candle_loader::NativeOnnxSessions::load_default().map(Self::Candle)
+            }
             NativeOnnxRuntime::Ort => ort_loader::NativeOnnxSessions::load_default().map(Self::Ort),
         }
     }
@@ -144,9 +147,13 @@ impl NativeOnnxSessions {
 
     fn plane_session(&self, plane: InferencePlane) -> PlaneSessionRef<'_> {
         match (self, plane) {
-            (Self::Candle(models), InferencePlane::Coronal) => PlaneSessionRef::Candle(&models.coronal),
+            (Self::Candle(models), InferencePlane::Coronal) => {
+                PlaneSessionRef::Candle(&models.coronal)
+            }
             (Self::Candle(models), InferencePlane::Axial) => PlaneSessionRef::Candle(&models.axial),
-            (Self::Candle(models), InferencePlane::Sagittal) => PlaneSessionRef::Candle(&models.sagittal),
+            (Self::Candle(models), InferencePlane::Sagittal) => {
+                PlaneSessionRef::Candle(&models.sagittal)
+            }
             (Self::Ort(models), InferencePlane::Coronal) => PlaneSessionRef::Ort(&models.coronal),
             (Self::Ort(models), InferencePlane::Axial) => PlaneSessionRef::Ort(&models.axial),
             (Self::Ort(models), InferencePlane::Sagittal) => PlaneSessionRef::Ort(&models.sagittal),
@@ -161,8 +168,8 @@ impl NativeOnnxSessions {
 
         output_shapes
             .first()
-            .and_then(|shape| shape.as_ref())
-            .and_then(|shape| shape.get(1).copied())
+            .and_then(|o: &Option<Vec<usize>>| o.as_ref())
+            .and_then(|v: &Vec<usize>| v.get(1).copied())
             .unwrap_or(79usize)
     }
 }
@@ -235,7 +242,10 @@ fn native_sparse_parallel_enabled() -> bool {
     std::env::var("FASTSURFER_NATIVE_SPARSE_PARALLEL")
         .map(|value| {
             let normalized = value.trim().to_ascii_lowercase();
-            !(normalized == "0" || normalized == "false" || normalized == "no" || normalized == "off")
+            !(normalized == "0"
+                || normalized == "false"
+                || normalized == "no"
+                || normalized == "off")
         })
         .unwrap_or(true)
 }
@@ -278,7 +288,8 @@ fn legacy_preprocessing_summary(models: &NativeOnnxSessions) -> String {
     let base_res = 1.0f32;
     let synthetic_zoom = [1.0f32, 1.0f32, 1.0f32];
 
-    let axial_channels = session_channels_or_default(models.plane_session(InferencePlane::Axial).input_shape());
+    let axial_channels =
+        session_channels_or_default(models.plane_session(InferencePlane::Axial).input_shape());
     let coronal_channels =
         session_channels_or_default(models.plane_session(InferencePlane::Coronal).input_shape());
     let sagittal_channels =
@@ -367,7 +378,8 @@ fn run_single_plane_forward_at_slice(
 }
 
 fn sagittal_index_map_for_classes(num_classes: usize) -> Option<Vec<usize>> {
-    let ranges_to_vec = |ranges: Vec<Vec<usize>>| ranges.into_iter().flatten().collect::<Vec<usize>>();
+    let ranges_to_vec =
+        |ranges: Vec<Vec<usize>>| ranges.into_iter().flatten().collect::<Vec<usize>>();
 
     match num_classes {
         96 => Some(ranges_to_vec(vec![
@@ -429,8 +441,7 @@ fn remap_sagittal_logits_to_full_space(
         if *source_class_idx >= classes {
             return Err(format!(
                 "Sagittal remap index out of range: source class {} >= {}",
-                source_class_idx,
-                classes
+                source_class_idx, classes
             ));
         }
         let src_offset = source_class_idx * hw;
@@ -451,7 +462,8 @@ fn merge_plane_logits_into_volume(
     expected_classes: usize,
 ) -> Result<(), String> {
     let [classes, h, w] = plane_result.shape_chw;
-    let [expected_h, expected_w, expected_slices] = transformed_volume_shape(volume_shape_xyz, plane);
+    let [expected_h, expected_w, expected_slices] =
+        transformed_volume_shape(volume_shape_xyz, plane);
 
     if h != expected_h || w != expected_w {
         return Err(format!(
@@ -519,7 +531,8 @@ fn merge_plane_logits_into_sparse_volume(
     sampled_offsets: &HashMap<usize, usize>,
 ) -> Result<(), String> {
     let [classes, h, w] = plane_result.shape_chw;
-    let [expected_h, expected_w, expected_slices] = transformed_volume_shape(volume_shape_xyz, plane);
+    let [expected_h, expected_w, expected_slices] =
+        transformed_volume_shape(volume_shape_xyz, plane);
 
     if h != expected_h || w != expected_w {
         return Err(format!(
@@ -677,11 +690,18 @@ fn discover_lut_path() -> Option<PathBuf> {
 
     let mut candidates = Vec::<PathBuf>::new();
     if let Ok(repo_root) = std::env::var("FASTSURFER_REPO_ROOT") {
-        candidates.push(PathBuf::from(repo_root).join("FastSurferCNN/config/FreeSurferColorLUT.txt"));
+        candidates
+            .push(PathBuf::from(repo_root).join("FastSurferCNN/config/FreeSurferColorLUT.txt"));
     }
     if let Ok(cwd) = std::env::current_dir() {
         candidates.push(cwd.join("FastSurferCNN/config/FreeSurferColorLUT.txt"));
-        candidates.push(cwd.join("..").join("..").join("..").join("..").join("FastSurferCNN/config/FreeSurferColorLUT.txt"));
+        candidates.push(
+            cwd.join("..")
+                .join("..")
+                .join("..")
+                .join("..")
+                .join("FastSurferCNN/config/FreeSurferColorLUT.txt"),
+        );
     }
 
     candidates
@@ -701,8 +721,8 @@ fn load_lut_ids() -> Result<Vec<u16>, String> {
 
     let mut ids = Vec::<u16>::new();
     for line in reader.lines() {
-        let line = line
-            .map_err(|error| format!("Failed reading LUT '{}': {error}", lut_path.display()))?;
+        let line =
+            line.map_err(|error| format!("Failed reading LUT '{}': {error}", lut_path.display()))?;
         let trimmed = line.trim();
         if trimmed.is_empty() || trimmed.starts_with('#') {
             continue;
@@ -796,12 +816,7 @@ fn write_u8_nifti(
     WriterOptions::new(output_path)
         .reference_header(&volume.header)
         .write_nifti(&array)
-        .map_err(|error| {
-            format!(
-                "Failed to write NIfTI '{}': {error}",
-                output_path.display()
-            )
-        })
+        .map_err(|error| format!("Failed to write NIfTI '{}': {error}", output_path.display()))
 }
 
 fn run_native_single_path<F>(
@@ -814,6 +829,8 @@ fn run_native_single_path<F>(
 where
     F: FnMut(u8, String),
 {
+    let rt = tokio::runtime::Handle::try_current()
+        .map_err(|_| "Failed to get current tokio runtime handle".to_string())?;
     if should_cancel() {
         return Err(cancelled_error());
     }
@@ -824,9 +841,11 @@ where
     let [sx, sy, sz] = volume.shape_xyz;
     let voxels = sx * sy * sz;
 
-    let [_, _, coronal_slices] = transformed_volume_shape(volume.shape_xyz, InferencePlane::Coronal);
+    let [_, _, coronal_slices] =
+        transformed_volume_shape(volume.shape_xyz, InferencePlane::Coronal);
     let [_, _, axial_slices] = transformed_volume_shape(volume.shape_xyz, InferencePlane::Axial);
-    let [_, _, sagittal_slices] = transformed_volume_shape(volume.shape_xyz, InferencePlane::Sagittal);
+    let [_, _, sagittal_slices] =
+        transformed_volume_shape(volume.shape_xyz, InferencePlane::Sagittal);
     let coronal_indices = native_slice_indices_for_plane(coronal_slices);
     let axial_indices = native_slice_indices_for_plane(axial_slices);
     let sagittal_indices = native_slice_indices_for_plane(sagittal_slices);
@@ -836,12 +855,18 @@ where
         return Err("Input volume has zero slices after orientation transforms".to_string());
     }
 
-    let coronal_channels =
-        session_channels_or_default(sessions.plane_session(InferencePlane::Coronal).input_shape());
+    let coronal_channels = session_channels_or_default(
+        sessions
+            .plane_session(InferencePlane::Coronal)
+            .input_shape(),
+    );
     let axial_channels =
         session_channels_or_default(sessions.plane_session(InferencePlane::Axial).input_shape());
-    let sagittal_channels =
-        session_channels_or_default(sessions.plane_session(InferencePlane::Sagittal).input_shape());
+    let sagittal_channels = session_channels_or_default(
+        sessions
+            .plane_session(InferencePlane::Sagittal)
+            .input_shape(),
+    );
 
     let class_count = sessions.class_count_or_default();
 
@@ -861,7 +886,9 @@ where
                     for iw in 0..w {
                         let (x, y, z) = oriented_to_xyz(plane, ih, iw, slice_index);
                         let voxel_offset = (x * sy * sz) + (y * sz) + z;
-                        if let std::collections::hash_map::Entry::Vacant(entry) = sampled_lookup.entry(voxel_offset) {
+                        if let std::collections::hash_map::Entry::Vacant(entry) =
+                            sampled_lookup.entry(voxel_offset)
+                        {
                             let ix = sampled_order.len();
                             sampled_order.push(voxel_offset);
                             entry.insert(ix);
@@ -883,115 +910,134 @@ where
     let mut plane_first_summaries: Vec<String> = Vec::new();
 
     let plane_specs = [
-        (InferencePlane::Coronal, coronal_indices, coronal_channels, 0.4f32),
-        (InferencePlane::Sagittal, sagittal_indices, sagittal_channels, 0.2f32),
+        (
+            InferencePlane::Coronal,
+            coronal_indices,
+            coronal_channels,
+            0.4f32,
+        ),
+        (
+            InferencePlane::Sagittal,
+            sagittal_indices,
+            sagittal_channels,
+            0.2f32,
+        ),
         (InferencePlane::Axial, axial_indices, axial_channels, 0.4f32),
     ];
 
-    let use_sparse_parallel = sparse_mode && native_sparse_parallel_enabled();
+    let use_parallel = native_sparse_parallel_enabled();
 
-    if use_sparse_parallel {
+    if use_parallel {
         if should_cancel() {
             return Err(cancelled_error());
         }
 
-        on_progress(5, "Running sparse per-plane ONNX forward passes...".to_string());
+        on_progress(5, "Initializing parallel ONNX inference...".to_string());
 
-        let mut plane_results = Vec::<(InferencePlane, f32, Vec<PlaneForwardResult>)>::new();
-        let sessions_ref = sessions;
-        let volume_ref = &volume;
-        thread::scope(|scope| {
-            let mut handles = Vec::new();
-            for (plane, slice_indices, _channels, weight) in &plane_specs {
-                if slice_indices.is_empty() {
-                    continue;
-                }
-                let slice_indices = slice_indices.clone();
-                let plane_value = *plane;
-                let weight_value = *weight;
-                handles.push(scope.spawn(move || {
-                    let mut collected = Vec::<PlaneForwardResult>::with_capacity(slice_indices.len());
-                    for slice_index in slice_indices {
-                        let plane_result = run_single_plane_forward_at_slice(
-                            sessions_ref,
-                            volume_ref,
-                            plane_value,
-                            slice_index,
-                        )?;
+        let (tx, mut rx) =
+            mpsc::unbounded_channel::<Result<(InferencePlane, f32, PlaneForwardResult), String>>();
 
-                        let plane_result = if plane_value == InferencePlane::Sagittal {
-                            let (logits, shape_chw) = remap_sagittal_logits_to_full_space(
-                                &plane_result.logits,
-                                plane_result.shape_chw,
-                            )?;
-                            PlaneForwardResult {
-                                summary: plane_result.summary,
-                                logits,
-                                shape_chw,
-                                slice_index: plane_result.slice_index,
-                            }
-                        } else {
-                            plane_result
-                        };
-                        collected.push(plane_result);
-                    }
+        // Wrap sessions and volume in Arc for safe sharing across threads
+        let sessions_arc = Arc::new(sessions.clone());
+        let volume_arc = Arc::new(volume.clone());
 
-                    Ok::<(InferencePlane, f32, Vec<PlaneForwardResult>), String>((
+        let mut handles = Vec::new();
+        for (plane, slice_indices, _channels, weight) in plane_specs {
+            if slice_indices.is_empty() {
+                continue;
+            }
+            let tx_clone = tx.clone();
+            let plane_value = plane;
+            let weight_value = weight;
+            let sessions_worker = sessions_arc.clone();
+            let volume_worker = volume_arc.clone();
+
+            handles.push(rt.spawn_blocking(move || {
+                for slice_index in slice_indices {
+                    let plane_result = run_single_plane_forward_at_slice(
+                        &sessions_worker,
+                        &volume_worker,
                         plane_value,
-                        weight_value,
-                        collected,
-                    ))
-                }));
-            }
+                        slice_index,
+                    )?;
 
-            for handle in handles {
-                plane_results.push(handle.join().map_err(|_| {
-                    "native sparse plane worker panicked before returning result".to_string()
-                })??);
-            }
+                    let plane_result = if plane_value == InferencePlane::Sagittal {
+                        let (logits, shape_chw) = remap_sagittal_logits_to_full_space(
+                            &plane_result.logits,
+                            plane_result.shape_chw,
+                        )?;
+                        PlaneForwardResult {
+                            summary: plane_result.summary,
+                            logits,
+                            shape_chw,
+                            slice_index: plane_result.slice_index,
+                        }
+                    } else {
+                        plane_result
+                    };
 
-            Ok::<(), String>(())
-        })?;
+                    if tx_clone
+                        .send(Ok((plane_value, weight_value, plane_result)))
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+                Ok::<(), String>(())
+            }));
+        }
+        drop(tx); // Close the original sender so rx finishes when all handles finish
 
-        for (plane, weight, results_for_plane) in plane_results {
+        // Coordination loop: collect results and report progress
+        while let Some(msg) = rt.block_on(rx.recv()) {
             if should_cancel() {
                 return Err(cancelled_error());
             }
 
-            if let Some(first) = results_for_plane.first() {
-                plane_first_summaries.push(first.summary.clone());
+            let (plane, weight, plane_result) = msg?;
+
+            if plane_result.slice_index == 0
+                || plane_first_summaries
+                    .iter()
+                    .all(|s| !s.contains(plane.as_str()))
+            {
+                plane_first_summaries.push(plane_result.summary.clone());
             }
 
-            let slice_count = results_for_plane.len();
-            for (position, plane_result) in results_for_plane.iter().enumerate() {
-                if should_cancel() {
-                    return Err(cancelled_error());
-                }
-
+            if sparse_mode {
                 merge_plane_logits_into_sparse_volume(
                     &mut merged_logits,
-                    plane_result,
+                    &plane_result,
                     plane,
                     volume.shape_xyz,
                     weight,
                     class_count,
                     &sampled_lookup,
                 )?;
-
-                processed_slices += 1;
-                if position == 0 || position + 1 == slice_count || (position + 1) % 16 == 0 {
-                    let file_progress = 5 + ((processed_slices * 85) / total_slices).min(85);
-                    on_progress(
-                        file_progress as u8,
-                        format!(
-                            "Aggregating {} plane slices: {}/{}",
-                            plane.as_str(),
-                            position + 1,
-                            slice_count
-                        ),
-                    );
-                }
+            } else {
+                merge_plane_logits_into_volume(
+                    &mut merged_logits,
+                    &plane_result,
+                    plane,
+                    volume.shape_xyz,
+                    weight,
+                    class_count,
+                )?;
             }
+
+            processed_slices += 1;
+            let file_progress = 5 + ((processed_slices * 85) / total_slices).min(85);
+            on_progress(
+                file_progress as u8,
+                format!(
+                    "Aggregating progress... {}/{} slices",
+                    processed_slices, total_slices
+                ),
+            );
+        }
+
+        for handle in handles {
+            rt.block_on(handle).map_err(|_| "worker task panicked")??;
         }
     } else {
         for (plane, slice_indices, _channels, weight) in plane_specs {
@@ -1014,7 +1060,8 @@ where
                     return Err(cancelled_error());
                 }
 
-                let plane_result = run_single_plane_forward_at_slice(sessions, &volume, plane, slice_index)?;
+                let plane_result =
+                    run_single_plane_forward_at_slice(sessions, &volume, plane, slice_index)?;
 
                 let plane_result = if plane == InferencePlane::Sagittal {
                     let (logits, shape_chw) = remap_sagittal_logits_to_full_space(
@@ -1057,18 +1104,16 @@ where
                 }
 
                 processed_slices += 1;
-                if position == 0 || position + 1 == slice_count || (position + 1) % 16 == 0 {
-                    let file_progress = 5 + ((processed_slices * 85) / total_slices).min(85);
-                    on_progress(
-                        file_progress as u8,
-                        format!(
-                            "Aggregating {} plane slices: {}/{}",
-                            plane.as_str(),
-                            position + 1,
-                            slice_count
-                        ),
-                    );
-                }
+                let file_progress = 5 + ((processed_slices * 85) / total_slices).min(85);
+                on_progress(
+                    file_progress as u8,
+                    format!(
+                        "Aggregating {} plane slices: {}/{}",
+                        plane.as_str(),
+                        position + 1,
+                        slice_count
+                    ),
+                );
             }
         }
     }
@@ -1260,8 +1305,8 @@ pub(crate) fn run_native_inference(
     })
 }
 
-pub(crate) fn run_native_inference_with_progress(
-    app_handle: &AppHandle,
+pub(crate) fn run_native_inference_with_progress<R: tauri::Runtime>(
+    app_handle: &tauri::AppHandle<R>,
     cancelled_tasks: &Arc<Mutex<BTreeSet<String>>>,
     task_id: &str,
     file_paths: &[String],
@@ -1382,27 +1427,33 @@ pub(crate) fn run_native_inference_with_progress(
                 .unwrap_or(false)
         };
 
-        let single = run_native_single_path(&sessions, &lut_ids, input_path, &should_cancel, |file_progress, file_message| {
-            let overall_progress = if total == 0 {
-                file_progress
-            } else {
-                ((((index * 100) + file_progress as usize) / total).min(99)) as u8
-            };
+        let single = run_native_single_path(
+            &sessions,
+            &lut_ids,
+            input_path,
+            &should_cancel,
+            |file_progress, file_message| {
+                let overall_progress = if total == 0 {
+                    file_progress
+                } else {
+                    ((((index * 100) + file_progress as usize) / total).min(99)) as u8
+                };
 
-            let _ = app_handle.emit(
-                "fastsurfer://inference-progress",
-                InferenceProgressEvent {
-                    task_id: task_id.to_string(),
-                    status: "item_progress".to_string(),
-                    message: file_message,
-                    total,
-                    completed: index,
-                    progress: overall_progress,
-                    current_path: Some(input_path.clone()),
-                    output_path: None,
-                },
-            );
-        });
+                let _ = app_handle.emit(
+                    "fastsurfer://inference-progress",
+                    InferenceProgressEvent {
+                        task_id: task_id.to_string(),
+                        status: "item_progress".to_string(),
+                        message: file_message,
+                        total,
+                        completed: index,
+                        progress: overall_progress,
+                        current_path: Some(input_path.clone()),
+                        output_path: None,
+                    },
+                );
+            },
+        );
 
         match single {
             Ok(single) => {
@@ -1433,7 +1484,8 @@ pub(crate) fn run_native_inference_with_progress(
                 );
             }
             Err(error) => {
-                let was_cancelled = error == NATIVE_CANCELLED_MESSAGE || is_task_cancelled(cancelled_tasks, task_id)?;
+                let was_cancelled = error == NATIVE_CANCELLED_MESSAGE
+                    || is_task_cancelled(cancelled_tasks, task_id)?;
                 let progress = if total == 0 {
                     0
                 } else {

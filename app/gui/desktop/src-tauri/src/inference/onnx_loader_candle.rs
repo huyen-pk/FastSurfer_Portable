@@ -1,3 +1,5 @@
+use candle::{DType, Device, Tensor};
+use candle_onnx::{onnx, read_file, simple_eval};
 use std::collections::BTreeSet;
 use std::collections::{HashMap, HashSet};
 use std::io::{Read, Seek, SeekFrom};
@@ -6,9 +8,8 @@ use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::Duration;
 use std::time::Instant;
-use candle::{DType, Device, Tensor};
-use candle_onnx::{onnx, read_file, simple_eval};
 
+#[derive(Clone)]
 pub(crate) struct OnnxModelRegistry {
     pub axial_model_path: String,
     pub coronal_model_path: String,
@@ -16,6 +17,7 @@ pub(crate) struct OnnxModelRegistry {
     pub source_dir: String,
 }
 
+#[derive(Clone)]
 pub(crate) struct NativeOnnxSessions {
     pub axial: PlaneSession,
     pub coronal: PlaneSession,
@@ -23,6 +25,7 @@ pub(crate) struct NativeOnnxSessions {
     pub registry: OnnxModelRegistry,
 }
 
+#[derive(Clone)]
 pub(crate) struct PlaneSession {
     pub model: Arc<onnx::ModelProto>,
     pub model_path: String,
@@ -49,26 +52,21 @@ fn native_trace_timing_enabled() -> bool {
         .unwrap_or(false)
 }
 
-    fn native_plane_timeout_secs() -> Option<u64> {
-        std::env::var("FASTSURFER_NATIVE_PLANE_TIMEOUT_SECS")
+fn native_plane_timeout_secs() -> Option<u64> {
+    std::env::var("FASTSURFER_NATIVE_PLANE_TIMEOUT_SECS")
         .ok()
         .and_then(|value| value.trim().parse::<u64>().ok())
         .filter(|value| *value > 0)
-    }
+}
 
 fn apply_native_cpu_thread_override() {
-    if std::env::var("RAYON_NUM_THREADS").is_ok() {
-        return;
-    }
-
-    if let Ok(value) = std::env::var("FASTSURFER_NATIVE_CPU_THREADS") {
-        if let Ok(parsed) = value.trim().parse::<usize>() {
-            if parsed > 0 {
-                unsafe {
-                    std::env::set_var("RAYON_NUM_THREADS", parsed.to_string());
-                }
-            }
-        }
+    if let Ok(value) = std::env::var("FASTSURFER_NATIVE_CPU_THREADS")
+        && let Ok(parsed) = value.trim().parse::<usize>()
+        && parsed > 0
+    {
+        let _ = rayon::ThreadPoolBuilder::new()
+            .num_threads(parsed)
+            .build_global();
     }
 }
 
@@ -94,12 +92,20 @@ impl OnnxModelRegistry {
         let candidate_dirs = candidate_onnx_dirs();
 
         for dir in &candidate_dirs {
-            let axial = find_model(dir, &["FastSurferVINN_Axial.onnx", "FastSurferVINN_axial.onnx"]);
-            let coronal =
-                find_model(dir, &["FastSurferVINN_Coronal.onnx", "FastSurferVINN_coronal.onnx"]);
+            let axial = find_model(
+                dir,
+                &["FastSurferVINN_Axial.onnx", "FastSurferVINN_axial.onnx"],
+            );
+            let coronal = find_model(
+                dir,
+                &["FastSurferVINN_Coronal.onnx", "FastSurferVINN_coronal.onnx"],
+            );
             let sagittal = find_model(
                 dir,
-                &["FastSurferVINN_Sagittal.onnx", "FastSurferVINN_sagittal.onnx"],
+                &[
+                    "FastSurferVINN_Sagittal.onnx",
+                    "FastSurferVINN_sagittal.onnx",
+                ],
             );
 
             if let (Some(axial_path), Some(coronal_path), Some(sagittal_path)) =
@@ -132,8 +138,8 @@ impl NativeOnnxSessions {
         let trace_timing = native_trace_timing_enabled();
         let t0 = Instant::now();
         if trace_timing {
-            let requested = std::env::var("FASTSURFER_NATIVE_DEVICE")
-                .unwrap_or_else(|_| "cpu".to_string());
+            let requested =
+                std::env::var("FASTSURFER_NATIVE_DEVICE").unwrap_or_else(|_| "cpu".to_string());
             let resolved = resolve_native_device_mode();
             eprintln!(
                 "[trace][native-onnx] requested_device={} resolved_device={} cuda_available={} metal_available={} rayon_threads={}",
@@ -156,20 +162,32 @@ impl NativeOnnxSessions {
         let t_ax = Instant::now();
         let axial = load_runnable_model(&registry.axial_model_path, "axial")?;
         if trace_timing {
-            eprintln!("[trace][native-onnx] loaded axial model in {} ms", t_ax.elapsed().as_millis());
+            eprintln!(
+                "[trace][native-onnx] loaded axial model in {} ms",
+                t_ax.elapsed().as_millis()
+            );
         }
 
         let t_cor = Instant::now();
         let coronal = load_runnable_model(&registry.coronal_model_path, "coronal")?;
         if trace_timing {
-            eprintln!("[trace][native-onnx] loaded coronal model in {} ms", t_cor.elapsed().as_millis());
+            eprintln!(
+                "[trace][native-onnx] loaded coronal model in {} ms",
+                t_cor.elapsed().as_millis()
+            );
         }
 
         let t_sag = Instant::now();
         let sagittal = load_runnable_model(&registry.sagittal_model_path, "sagittal")?;
         if trace_timing {
-            eprintln!("[trace][native-onnx] loaded sagittal model in {} ms", t_sag.elapsed().as_millis());
-            eprintln!("[trace][native-onnx] total session load {} ms", t0.elapsed().as_millis());
+            eprintln!(
+                "[trace][native-onnx] loaded sagittal model in {} ms",
+                t_sag.elapsed().as_millis()
+            );
+            eprintln!(
+                "[trace][native-onnx] total session load {} ms",
+                t0.elapsed().as_millis()
+            );
         }
 
         Ok(Self {
@@ -181,11 +199,11 @@ impl NativeOnnxSessions {
     }
 
     pub(crate) fn run_dummy_probe(&self) -> Result<Vec<String>, String> {
-        let mut probe_lines = Vec::new();
-        probe_lines.push(self.axial.run_dummy_probe("axial")?);
-        probe_lines.push(self.coronal.run_dummy_probe("coronal")?);
-        probe_lines.push(self.sagittal.run_dummy_probe("sagittal")?);
-        Ok(probe_lines)
+        Ok(vec![
+            self.axial.run_dummy_probe("axial")?,
+            self.coronal.run_dummy_probe("coronal")?,
+            self.sagittal.run_dummy_probe("sagittal")?,
+        ])
     }
 }
 
@@ -246,14 +264,13 @@ impl PlaneSession {
             ));
         }
 
-        let input = Tensor::from_vec(input_data.to_vec(), input_shape, &Device::Cpu).map_err(
-            |error| {
+        let input =
+            Tensor::from_vec(input_data.to_vec(), input_shape, &Device::Cpu).map_err(|error| {
                 format!(
                     "{plane}: failed to create input tensor for shape {:?}: {error}",
                     input_shape
                 )
-            },
-        )?;
+            })?;
 
         let mut inputs = HashMap::new();
         inputs.insert(self.input_name.clone(), input);
@@ -296,7 +313,10 @@ impl PlaneSession {
         }
 
         if trace_timing {
-            eprintln!("[trace][native-onnx] simple_eval start plane={} input_shape={:?}", plane, input_shape);
+            eprintln!(
+                "[trace][native-onnx] simple_eval start plane={} input_shape={:?}",
+                plane, input_shape
+            );
         }
         let eval_started = Instant::now();
         let outputs = if let Some(timeout_secs) = native_plane_timeout_secs() {
@@ -405,10 +425,9 @@ fn load_runnable_model(path: &str, plane: &str) -> Result<PlaneSession, String> 
     rewrite_max_nodes(&mut model);
     rewrite_maxpool_extra_outputs(&mut model);
 
-    let graph = model
-        .graph
-        .as_ref()
-        .ok_or_else(|| format!("Failed to load {plane} ONNX model at '{path}': graph is missing"))?;
+    let graph = model.graph.as_ref().ok_or_else(|| {
+        format!("Failed to load {plane} ONNX model at '{path}': graph is missing")
+    })?;
 
     let initializers = graph
         .initializer
@@ -879,13 +898,13 @@ fn candidate_onnx_dirs() -> Vec<PathBuf> {
         candidates.push(cwd.join("..").join("..").join("..").join("..").join("onnx"));
     }
 
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(exe_dir) = exe.parent() {
-            candidates.push(exe_dir.join("onnx"));
-            candidates.push(exe_dir.join("_internal").join("onnx"));
-            candidates.push(exe_dir.join("..").join("Resources").join("onnx"));
-            candidates.push(exe_dir.join("..").join("..").join("onnx"));
-        }
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(exe_dir) = exe.parent()
+    {
+        candidates.push(exe_dir.join("onnx"));
+        candidates.push(exe_dir.join("_internal").join("onnx"));
+        candidates.push(exe_dir.join("..").join("Resources").join("onnx"));
+        candidates.push(exe_dir.join("..").join("..").join("onnx"));
     }
 
     let mut seen: BTreeSet<String> = BTreeSet::new();

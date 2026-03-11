@@ -20,7 +20,10 @@ pub struct AppState {
 /// Helper command to flag a specific task ID as cancelled.
 /// Also forcefully stops the backend process to interrupt current work immediately.
 #[tauri::command]
-pub fn cancel_fastsurfer_task(app_state: State<'_, AppState>, task_id: String) -> Result<(), String> {
+pub fn cancel_fastsurfer_task(
+    app_state: State<'_, AppState>,
+    task_id: String,
+) -> Result<(), String> {
     let mut cancelled = app_state
         .cancelled_tasks
         .lock()

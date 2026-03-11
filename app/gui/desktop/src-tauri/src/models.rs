@@ -1,7 +1,7 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// Additional output artifact paths produced from a segmentation result.
-#[derive(Serialize, Clone, Default)]
+#[derive(Serialize, Deserialize, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct InferenceArtifacts {
     /// Optional brainmask file path.
@@ -11,7 +11,7 @@ pub struct InferenceArtifacts {
 }
 
 /// Quality-control metadata produced during inference.
-#[derive(Serialize, Clone, Default)]
+#[derive(Serialize, Deserialize, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct InferenceQc {
     /// Whether volume-based QC passed for this result.
@@ -21,7 +21,7 @@ pub struct InferenceQc {
 }
 
 /// Represents the output of a single inference run on an input file.
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct InferenceOutput {
     /// The original path of the input file (MRI).
@@ -55,7 +55,7 @@ pub struct ProcessingRunResult {
 }
 
 /// Event payload for tracking the progress of an inference task.
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InferenceProgressEvent {
     /// Unique identifier for the batch task.

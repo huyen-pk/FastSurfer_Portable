@@ -1,12 +1,12 @@
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use std::fs;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+#[path = "../src/inference/onnx_loader_candle.rs"]
+mod onnx_loader;
 #[path = "../src/inference/preprocess.rs"]
 mod preprocess;
-#[path = "../src/inference/onnx_loader.rs"]
-mod onnx_loader;
 
 fn find_repo_root() -> Option<PathBuf> {
     let mut candidates = vec![PathBuf::from(env!("CARGO_MANIFEST_DIR"))];
@@ -86,7 +86,10 @@ fn prepare_state() -> Result<BenchState, String> {
     }
 
     unsafe {
-        std::env::set_var("FASTSURFER_REPO_ROOT", repo_root.to_string_lossy().to_string());
+        std::env::set_var(
+            "FASTSURFER_REPO_ROOT",
+            repo_root.to_string_lossy().to_string(),
+        );
         std::env::set_var("FASTSURFER_NATIVE_TRACE_TIMING", "0");
         std::env::remove_var("FASTSURFER_NATIVE_PLANE_TIMEOUT_SECS");
         if std::env::var("FASTSURFER_NATIVE_CPU_THREADS").is_err() {
@@ -182,7 +185,10 @@ fn bench_preprocess_and_forward(c: &mut Criterion) {
         let rss1 = vm_rss_kb();
         let faults1 = faults();
         if let (Some(before), Some(after)) = (rss0, rss1) {
-            eprintln!("[bench] VmRSS delta (forward warmup): {} kB", (after as i64) - (before as i64));
+            eprintln!(
+                "[bench] VmRSS delta (forward warmup): {} kB",
+                (after as i64) - (before as i64)
+            );
         }
         if let (Some((min0, maj0)), Some((min1, maj1))) = (faults0, faults1) {
             eprintln!(

@@ -159,8 +159,7 @@ pub fn run_fastsurfer_inference_with_progress_with_app_state(
         match backend.predict_single_path(input_path, &task_id, Some(&mut intra_file_progress)) {
             Ok(prediction) => {
                 if let Some(parent) = Path::new(&prediction.output_path).parent() {
-                    result_directories
-                        .insert(parent.to_string_lossy().to_string());
+                    result_directories.insert(parent.to_string_lossy().to_string());
                 }
 
                 let completed = index + 1;

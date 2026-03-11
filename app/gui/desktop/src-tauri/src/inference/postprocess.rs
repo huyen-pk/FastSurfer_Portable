@@ -2,8 +2,8 @@ use std::collections::VecDeque;
 
 const FRONTAL_SPECIAL_LABELS: [u16; 4] = [1012, 2012, 1019, 2019];
 const CORTEX_SPLIT_LABELS: [u16; 19] = [
-    1003, 1006, 1007, 1008, 1009, 1011, 1015, 1018, 1019, 1020, 1025, 1026, 1027, 1028, 1029,
-    1030, 1031, 1034, 1035,
+    1003, 1006, 1007, 1008, 1009, 1011, 1015, 1018, 1019, 1020, 1025, 1026, 1027, 1028, 1029, 1030,
+    1031, 1034, 1035,
 ];
 const PROBLEMATIC_SPLIT_LABELS: [u16; 4] = [1011, 1019, 1026, 1029];
 
@@ -69,7 +69,9 @@ fn connected_components_for_mask(mask: &[u8], shape: [usize; 3]) -> Vec<Vec<usiz
                                 {
                                     continue;
                                 }
-                                let nidx = ((nx as usize) * sy * sz) + ((ny as usize) * sz) + (nz as usize);
+                                let nidx = ((nx as usize) * sy * sz)
+                                    + ((ny as usize) * sz)
+                                    + (nz as usize);
                                 if !visited[nidx] && mask[nidx] != 0 {
                                     visited[nidx] = true;
                                     queue.push_back(nidx);
@@ -119,8 +121,14 @@ pub(crate) fn split_cortex_labels(pred_labels: &mut [u16], shape_xyz: [usize; 3]
         .map(|value| if *value == 41 { 1u8 } else { 0u8 })
         .collect::<Vec<u8>>();
 
-    let lh_centroid = centroid_of_indices(&largest_component_indices(&lh_wm_mask, shape_xyz), shape_xyz);
-    let rh_centroid = centroid_of_indices(&largest_component_indices(&rh_wm_mask, shape_xyz), shape_xyz);
+    let lh_centroid = centroid_of_indices(
+        &largest_component_indices(&lh_wm_mask, shape_xyz),
+        shape_xyz,
+    );
+    let rh_centroid = centroid_of_indices(
+        &largest_component_indices(&rh_wm_mask, shape_xyz),
+        shape_xyz,
+    );
     let (Some(lh_centroid), Some(rh_centroid)) = (lh_centroid, rh_centroid) else {
         return;
     };
@@ -279,7 +287,8 @@ fn binary_dilate(mask: &[u8], shape: [usize; 3]) -> Vec<u8> {
                             {
                                 continue;
                             }
-                            let nidx = ((nx as usize) * sy * sz) + ((ny as usize) * sz) + (nz as usize);
+                            let nidx =
+                                ((nx as usize) * sy * sz) + ((ny as usize) * sz) + (nz as usize);
                             if mask[nidx] != 0 {
                                 any = true;
                                 break;
@@ -324,7 +333,8 @@ fn binary_erode(mask: &[u8], shape: [usize; 3]) -> Vec<u8> {
                                 all = false;
                                 break;
                             }
-                            let nidx = ((nx as usize) * sy * sz) + ((ny as usize) * sz) + (nz as usize);
+                            let nidx =
+                                ((nx as usize) * sy * sz) + ((ny as usize) * sz) + (nz as usize);
                             if mask[nidx] == 0 {
                                 all = false;
                                 break;
@@ -390,7 +400,9 @@ fn keep_largest_connected_component(mask: &[u8], shape: [usize; 3]) -> Vec<u8> {
                                 {
                                     continue;
                                 }
-                                let nidx = ((nx as usize) * sy * sz) + ((ny as usize) * sz) + (nz as usize);
+                                let nidx = ((nx as usize) * sy * sz)
+                                    + ((ny as usize) * sz)
+                                    + (nz as usize);
                                 if !visited[nidx] && mask[nidx] != 0 {
                                     visited[nidx] = true;
                                     queue.push_back(nidx);

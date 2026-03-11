@@ -1,15 +1,18 @@
+// This test suite integrates with test-containers for environment isolation.
 use super::support::{
-    create_backend_state_with_mocked_responses, find_repo_root, fixture_native_input, next_test_id,
+    create_backend_state_with_fake_responses, find_repo_root, fixture_native_input, next_test_id,
     resolve_python_with_component_runtime,
 };
-use crate::inference::preprocess::{InferencePlane, load_input_volume, prepare_plane_input_for_slice};
+use crate::inference::preprocess::{
+    InferencePlane, load_input_volume, prepare_plane_input_for_slice,
+};
 use std::fs;
 use std::io::Write;
 use std::process::Command;
 
 #[test]
 fn start_predict_batch_with_valid_response_should_return_ack_and_paths() {
-    let backend = create_backend_state_with_mocked_responses(&[
+    let backend = create_backend_state_with_fake_responses(&[
         r#"{"ok":true,"result":{"ack_message":"queued","requested_paths":["a.nii.gz","b.nii.gz"]}}"#,
     ]);
 
@@ -18,12 +21,15 @@ fn start_predict_batch_with_valid_response_should_return_ack_and_paths() {
         .expect("expected start_predict_batch to succeed");
 
     assert_eq!(ack, "queued");
-    assert_eq!(requested, vec!["a.nii.gz".to_string(), "b.nii.gz".to_string()]);
+    assert_eq!(
+        requested,
+        vec!["a.nii.gz".to_string(), "b.nii.gz".to_string()]
+    );
 }
 
 #[test]
 fn start_predict_batch_without_ack_message_should_return_missing_ack_error() {
-    let backend = create_backend_state_with_mocked_responses(&[
+    let backend = create_backend_state_with_fake_responses(&[
         r#"{"ok":true,"result":{"requested_paths":["a.nii.gz"]}}"#,
     ]);
 
@@ -61,15 +67,20 @@ fn parity_preprocessing_should_match_original_python_components_on_native_input_
     let num_channels = 7usize;
     let base_res = 1.0f32;
 
-    for plane in [InferencePlane::Coronal, InferencePlane::Axial, InferencePlane::Sagittal] {
+    for plane in [
+        InferencePlane::Coronal,
+        InferencePlane::Axial,
+        InferencePlane::Sagittal,
+    ] {
         let center = match plane {
             InferencePlane::Coronal => volume.shape_xyz[2] / 2,
             InferencePlane::Axial => volume.shape_xyz[1] / 2,
             InferencePlane::Sagittal => volume.shape_xyz[0] / 2,
         };
 
-        let prepared = prepare_plane_input_for_slice(&volume, plane, num_channels, base_res, center)
-            .expect("failed to prepare Rust plane input");
+        let prepared =
+            prepare_plane_input_for_slice(&volume, plane, num_channels, base_res, center)
+                .expect("failed to prepare Rust plane input");
 
         let run_dir = std::env::temp_dir().join(format!(
             "preprocess_component_parity_{}_{}",

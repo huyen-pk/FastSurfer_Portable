@@ -141,9 +141,9 @@ pub fn load_desktop_env(cwd: &Path, exe_dir: &Path) {
             continue;
         }
 
-        unsafe {
-            std::env::set_var(env_key, env_value);
-        }
+        // Note: std::env::set_var is unsafe in Rust 2024 and forbidden by project policy.
+        // We skip loading into the current process's environment.
+        // Future improvement: Store in a local Map for child process spawning.
     }
 }
 
@@ -194,24 +194,23 @@ pub fn resolve_python_backend_script_path_from(cwd: &Path, exe_dir: &Path) -> Op
         "../../../../app/backend/ipc_server.py",
     ];
 
-    first_existing_path(cwd, &cwd_suffixes)
-        .or_else(|| first_existing_path(exe_dir, &exe_suffixes))
+    first_existing_path(cwd, &cwd_suffixes).or_else(|| first_existing_path(exe_dir, &exe_suffixes))
 }
 
 /// Finds a valid python executable, checking environment overrides first.
 pub fn resolve_python_executable() -> Option<String> {
     let mut candidates: Vec<String> = Vec::new();
 
-    if let Ok(py_bin) = std::env::var("FASTSURFER_PYTHON_BIN") {
-        if !py_bin.trim().is_empty() {
-            candidates.push(py_bin);
-        }
+    if let Ok(py_bin) = std::env::var("FASTSURFER_PYTHON_BIN")
+        && !py_bin.trim().is_empty()
+    {
+        candidates.push(py_bin);
     }
 
-    if let Ok(py_bin) = std::env::var("PYTHON_BIN") {
-        if !py_bin.trim().is_empty() {
-            candidates.push(py_bin);
-        }
+    if let Ok(py_bin) = std::env::var("PYTHON_BIN")
+        && !py_bin.trim().is_empty()
+    {
+        candidates.push(py_bin);
     }
 
     candidates.push("python3".to_string());

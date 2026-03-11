@@ -1,15 +1,15 @@
 use crate::models::{InferenceArtifacts, InferenceOutput, InferenceQc, ProcessingRunResult};
 use crate::process_mgmt::{
-    load_desktop_env, resolve_backend_launch_command_from, resolve_python_backend_script_path_from,
-    resolve_repo_root_from_python_script, spawn_backend_process, BackendLaunchCommand,
-    BackendProcess,
+    BackendLaunchCommand, BackendProcess, load_desktop_env, resolve_backend_launch_command_from,
+    resolve_python_backend_script_path_from, resolve_repo_root_from_python_script,
+    spawn_backend_process,
 };
 use crate::transport::{read_ipc_response, write_ipc_request};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::thread;
 use std::time::Duration;
 
@@ -30,7 +30,8 @@ impl BackendState {
     /// Initializes the backend state by resolving paths and spawning the initial process.
     /// Performs an immediate "health" check RPC call to verify readiness.
     pub fn new() -> Result<Self, String> {
-        let cwd = std::env::current_dir().map_err(|e| format!("Cannot resolve current dir: {e}"))?;
+        let cwd =
+            std::env::current_dir().map_err(|e| format!("Cannot resolve current dir: {e}"))?;
         let exe_path = std::env::current_exe()
             .map_err(|e| format!("Cannot resolve current executable path: {e}"))?;
         let exe_dir = exe_path
@@ -176,7 +177,9 @@ impl BackendState {
                     let forced = Command::new("taskkill")
                         .args(["/PID", &pid.to_string(), "/F", "/T"])
                         .status()
-                        .map_err(|e| format!("Failed to invoke taskkill for backend process: {e}"))?;
+                        .map_err(|e| {
+                            format!("Failed to invoke taskkill for backend process: {e}")
+                        })?;
                     if !forced.success() {
                         return Err("taskkill returned non-zero exit code".to_string());
                     }
@@ -190,12 +193,12 @@ impl BackendState {
                 .args(["-15", &pid.to_string()])
                 .status();
 
-            if let Ok(status) = gentle {
-                if status.success() {
-                    thread::sleep(Duration::from_millis(250));
-                    self.current_pid.store(0, Ordering::SeqCst);
-                    return Ok(());
-                }
+            if let Ok(status) = gentle
+                && status.success()
+            {
+                thread::sleep(Duration::from_millis(250));
+                self.current_pid.store(0, Ordering::SeqCst);
+                return Ok(());
             }
 
             let forced = Command::new("kill")
@@ -418,8 +421,7 @@ impl BackendState {
     ) -> Result<InferenceOutput, String> {
         eprintln!(
             "[trace][backend] predict_single_path task_id={} input_path={}",
-            task_id,
-            input_path
+            task_id, input_path
         );
         let mut on_progress = on_progress;
         let mut progress_adapter = |value: Value| {

@@ -1,5 +1,6 @@
+// This test suite integrates with test-containers for environment isolation.
 use super::support::{
-    convert_mgz_to_nii_gz, create_backend_state_from_process, find_repo_root, fixture_native_input,
+    convert_mgz_to_nii_gz, create_backend_state_via_process, find_repo_root, fixture_native_input,
     fixture_python_pred, python_has_fastsurfer_runtime, python_has_nibabel_runtime,
     resolve_python_with_component_runtime, run_native_inference_with_timeout,
 };
@@ -10,12 +11,10 @@ use crate::inference::preprocess::{
     InferencePlane, InputVolume, load_input_volume, prepare_plane_input_for_slice,
     transformed_volume_shape,
 };
+use crate::prediction::run_fastsurfer_inference_with_backend;
+use crate::process_mgmt::{load_desktop_env, resolve_backend_launch_command_from};
 use ndarray::Array3;
 use nifti::writer::WriterOptions;
-use crate::prediction::run_fastsurfer_inference_with_backend;
-use crate::process_mgmt::{
-    load_desktop_env, resolve_backend_launch_command_from,
-};
 use serde::Serialize;
 use serde_json::Value;
 use std::fs;
@@ -130,7 +129,11 @@ impl PreprocessStats {
         let n = self.count as f64;
         let mean = self.sum / n;
         let var = (self.sumsq / n) - (mean * mean);
-        let std = if var.is_sign_negative() { 0.0 } else { var.sqrt() };
+        let std = if var.is_sign_negative() {
+            0.0
+        } else {
+            var.sqrt()
+        };
         serde_json::json!({
             "count": self.count,
             "mean": mean,
@@ -148,12 +151,12 @@ fn now_unix() -> u64 {
         .unwrap_or(0)
 }
 
-    fn now_unix_millis() -> u128 {
-        SystemTime::now()
+fn now_unix_millis() -> u128 {
+    SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis())
         .unwrap_or(0)
-    }
+}
 
 fn run_python_json(
     python_bin: &str,
@@ -186,8 +189,12 @@ fn run_python_json(
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    serde_json::from_str(stdout.trim())
-        .map_err(|error| format!("failed to parse python helper json: {error}; raw='{}'", stdout.trim()))
+    serde_json::from_str(stdout.trim()).map_err(|error| {
+        format!(
+            "failed to parse python helper json: {error}; raw='{}'",
+            stdout.trim()
+        )
+    })
 }
 
 fn write_f32_nifti(
@@ -211,7 +218,12 @@ fn write_f32_nifti(
     WriterOptions::new(output_path)
         .reference_header(&volume.header)
         .write_nifti(&array)
-        .map_err(|error| format!("failed to write preprocess nifti '{}': {error}", output_path.display()))
+        .map_err(|error| {
+            format!(
+                "failed to write preprocess nifti '{}': {error}",
+                output_path.display()
+            )
+        })
 }
 
 fn preprocess_stage_rust_full_volume(
@@ -222,7 +234,11 @@ fn preprocess_stage_rust_full_volume(
     let mut stats = PreprocessStats::new();
     let t0 = Instant::now();
 
-    for plane in [InferencePlane::Coronal, InferencePlane::Axial, InferencePlane::Sagittal] {
+    for plane in [
+        InferencePlane::Coronal,
+        InferencePlane::Axial,
+        InferencePlane::Sagittal,
+    ] {
         let [h, w, slices] = transformed_volume_shape(volume.shape_xyz, plane);
         let mut center_channel_volume = vec![0f32; h * w * slices];
 
@@ -348,10 +364,7 @@ print(json.dumps({
     Ok((elapsed, parsed["stats"].clone()))
 }
 
-fn inference_stage_python(
-    repo_root: &Path,
-    input_path: &Path,
-) -> Result<(f64, PathBuf), String> {
+fn inference_stage_python(repo_root: &Path, input_path: &Path) -> Result<(f64, PathBuf), String> {
     let cwd = repo_root.join("app/gui/desktop/src-tauri");
     let exe_dir = cwd.join("target/debug");
     load_desktop_env(&cwd, &exe_dir);
@@ -371,7 +384,7 @@ fn inference_stage_python(
         .spawn()
         .map_err(|error| format!("failed to spawn backend process: {error}"))?;
 
-    let backend = create_backend_state_from_process(child);
+    let backend = create_backend_state_via_process(child);
 
     let t0 = Instant::now();
     let py_result = run_fastsurfer_inference_with_backend(
@@ -388,7 +401,10 @@ fn inference_stage_python(
 
     let py_pred = PathBuf::from(&py_result.results[0].output_path);
     if !py_pred.exists() {
-        return Err(format!("python prediction output not found: {}", py_pred.display()));
+        return Err(format!(
+            "python prediction output not found: {}",
+            py_pred.display()
+        ));
     }
 
     Ok((elapsed_ms, py_pred))
@@ -402,10 +418,14 @@ fn ensure_python_golden_fixture(
         "app/gui/desktop/src-tauri/testing/data/fs_reference/Subject140/forward pass/python_forward_pred.nii.gz",
     );
     if fs_reference_pred.exists() {
-        let fs_volume = load_input_volume(&fs_reference_pred.to_string_lossy())
-            .map_err(|error| format!("failed loading fs_reference python golden fixture: {error}"))?;
-        let native_volume = load_input_volume(&native_input_nii.to_string_lossy())
-            .map_err(|error| format!("failed loading native input for fs_reference validation: {error}"))?;
+        let fs_volume =
+            load_input_volume(&fs_reference_pred.to_string_lossy()).map_err(|error| {
+                format!("failed loading fs_reference python golden fixture: {error}")
+            })?;
+        let native_volume =
+            load_input_volume(&native_input_nii.to_string_lossy()).map_err(|error| {
+                format!("failed loading native input for fs_reference validation: {error}")
+            })?;
 
         if fs_volume.shape_xyz == native_volume.shape_xyz {
             return Ok(fs_reference_pred);
@@ -417,8 +437,10 @@ fn ensure_python_golden_fixture(
     if fixture_pred.exists() {
         let fixture_volume = load_input_volume(&fixture_pred.to_string_lossy())
             .map_err(|error| format!("failed loading existing python golden fixture: {error}"))?;
-        let native_volume = load_input_volume(&native_input_nii.to_string_lossy())
-            .map_err(|error| format!("failed loading native input for fixture validation: {error}"))?;
+        let native_volume =
+            load_input_volume(&native_input_nii.to_string_lossy()).map_err(|error| {
+                format!("failed loading native input for fixture validation: {error}")
+            })?;
 
         if fixture_volume.shape_xyz == native_volume.shape_xyz {
             return Ok(fixture_pred);
@@ -431,12 +453,13 @@ fn ensure_python_golden_fixture(
     }
 
     let (_elapsed_ms, generated_pred) = inference_stage_python(repo_root, native_input_nii)?;
-    fs::copy(&generated_pred, &fixture_pred)
-        .map_err(|error| format!(
+    fs::copy(&generated_pred, &fixture_pred).map_err(|error| {
+        format!(
             "failed copying generated python prediction '{}' to golden fixture '{}': {error}",
             generated_pred.display(),
             fixture_pred.display()
-        ))?;
+        )
+    })?;
 
     Ok(fixture_pred)
 }
@@ -544,8 +567,13 @@ print(json.dumps({
 
 fn copy_if_exists(src: &Path, dst: &Path) -> Result<(), String> {
     if src.exists() {
-        fs::copy(src, dst)
-            .map_err(|error| format!("failed copying '{}' -> '{}': {error}", src.display(), dst.display()))?;
+        fs::copy(src, dst).map_err(|error| {
+            format!(
+                "failed copying '{}' -> '{}': {error}",
+                src.display(),
+                dst.display()
+            )
+        })?;
     }
     Ok(())
 }
@@ -578,7 +606,10 @@ fn parity_run_python_benchmark() -> bool {
         .ok()
         .map(|value| {
             let normalized = value.trim().to_ascii_lowercase();
-            !(normalized == "0" || normalized == "false" || normalized == "no" || normalized == "off")
+            !(normalized == "0"
+                || normalized == "false"
+                || normalized == "no"
+                || normalized == "off")
         })
         .unwrap_or(true)
 }
@@ -598,13 +629,19 @@ fn parity_dice_assd_hd95_hdmax_icc_full_volume_pipeline_should_generate_stage_be
     if !python_has_fastsurfer_runtime(&python_bin, &repo_root)
         || !python_has_nibabel_runtime(&python_bin, &repo_root)
     {
-        eprintln!("python runtime missing FastSurfer/nibabel deps; skipping full-volume parity benchmark");
+        eprintln!(
+            "python runtime missing FastSurfer/nibabel deps; skipping full-volume parity benchmark"
+        );
         return;
     }
 
-    let input_mgz = repo_root.join("app/gui/desktop/src-tauri/testing/data/Subject140/140_orig.mgz");
+    let input_mgz =
+        repo_root.join("app/gui/desktop/src-tauri/testing/data/Subject140/140_orig.mgz");
     if !input_mgz.exists() {
-        eprintln!("missing Subject140 input at '{}'; skipping", input_mgz.display());
+        eprintln!(
+            "missing Subject140 input at '{}'; skipping",
+            input_mgz.display()
+        );
         return;
     }
 
@@ -636,10 +673,12 @@ fn parity_dice_assd_hd95_hdmax_icc_full_volume_pipeline_should_generate_stage_be
     let input_mgz_copy = run_dir.join("input_subject140.mgz");
     let input_native_copy = run_dir.join("input_subject140.native_input.nii.gz");
     copy_if_exists(&input_mgz, &input_mgz_copy).expect("failed copying input mgz artifact");
-    copy_if_exists(&fixture_native, &input_native_copy).expect("failed copying input native nii artifact");
+    copy_if_exists(&fixture_native, &input_native_copy)
+        .expect("failed copying input native nii artifact");
 
-    let (rust_pre_ms, rust_pre_stats) = preprocess_stage_rust_full_volume(&fixture_native, &preprocess_dir)
-        .expect("rust preprocess stage failed");
+    let (rust_pre_ms, rust_pre_stats) =
+        preprocess_stage_rust_full_volume(&fixture_native, &preprocess_dir)
+            .expect("rust preprocess stage failed");
     let (python_pre_ms, python_pre_stats) = preprocess_stage_python_full_volume(
         &python_bin,
         &repo_root,
@@ -651,7 +690,10 @@ fn parity_dice_assd_hd95_hdmax_icc_full_volume_pipeline_should_generate_stage_be
     let slices_per_plane = parity_slices_per_plane();
 
     unsafe {
-        std::env::set_var("FASTSURFER_REPO_ROOT", repo_root.to_string_lossy().to_string());
+        std::env::set_var(
+            "FASTSURFER_REPO_ROOT",
+            repo_root.to_string_lossy().to_string(),
+        );
         std::env::set_var(
             "FASTSURFER_NATIVE_SLICES_PER_PLANE",
             slices_per_plane.to_string(),
@@ -673,9 +715,16 @@ fn parity_dice_assd_hd95_hdmax_icc_full_volume_pipeline_should_generate_stage_be
     .expect("rust full-volume inference failed");
     let rust_inf_ms = rust_inf_t0.elapsed().as_secs_f64() * 1000.0;
 
-    assert!(!rust_result.results.is_empty(), "rust full-volume returned no results");
+    assert!(
+        !rust_result.results.is_empty(),
+        "rust full-volume returned no results"
+    );
     let rust_pred = PathBuf::from(&rust_result.results[0].output_path);
-    assert!(rust_pred.exists(), "rust pred output not found: {}", rust_pred.display());
+    assert!(
+        rust_pred.exists(),
+        "rust pred output not found: {}",
+        rust_pred.display()
+    );
 
     let python_golden_pred = ensure_python_golden_fixture(&repo_root, &fixture_native)
         .expect("failed to ensure python golden prediction fixture");
@@ -688,7 +737,8 @@ fn parity_dice_assd_hd95_hdmax_icc_full_volume_pipeline_should_generate_stage_be
         (0.0, python_golden_pred.clone())
     };
 
-    let metrics_script = repo_root.join("app/gui/desktop/src-tauri/testing/python/parity_metrics.py");
+    let metrics_script =
+        repo_root.join("app/gui/desktop/src-tauri/testing/python/parity_metrics.py");
     let inference_metrics_json = forward_dir.join("inference_metrics.json");
     let status = Command::new(&python_bin)
         .arg(&metrics_script)
@@ -699,7 +749,10 @@ fn parity_dice_assd_hd95_hdmax_icc_full_volume_pipeline_should_generate_stage_be
         .env("PYTHONPATH", repo_root.to_string_lossy().to_string())
         .status()
         .expect("failed to run parity_metrics.py for inference stage");
-    assert!(status.success(), "parity_metrics.py failed for inference stage");
+    assert!(
+        status.success(),
+        "parity_metrics.py failed for inference stage"
+    );
 
     let inference_metrics = serde_json::from_str::<Value>(
         &fs::read_to_string(&inference_metrics_json)
@@ -707,11 +760,16 @@ fn parity_dice_assd_hd95_hdmax_icc_full_volume_pipeline_should_generate_stage_be
     )
     .expect("failed parsing inference metrics json");
 
-    let dice_fg = read_nested_f64(&inference_metrics, &["aggregate", "dice_foreground"]).unwrap_or(0.0);
-    let dice_macro = read_nested_f64(&inference_metrics, &["aggregate", "dice_macro"]).unwrap_or(0.0);
-    let icc_2_1 = read_nested_f64(&inference_metrics, &["aggregate", "icc_2_1_volumes"]).unwrap_or(0.0);
-    let assd_fg = read_nested_f64(&inference_metrics, &["aggregate", "assd_foreground"]).unwrap_or(f64::INFINITY);
-    let hd95_fg = read_nested_f64(&inference_metrics, &["aggregate", "hd95_foreground"]).unwrap_or(f64::INFINITY);
+    let dice_fg =
+        read_nested_f64(&inference_metrics, &["aggregate", "dice_foreground"]).unwrap_or(0.0);
+    let dice_macro =
+        read_nested_f64(&inference_metrics, &["aggregate", "dice_macro"]).unwrap_or(0.0);
+    let icc_2_1 =
+        read_nested_f64(&inference_metrics, &["aggregate", "icc_2_1_volumes"]).unwrap_or(0.0);
+    let assd_fg = read_nested_f64(&inference_metrics, &["aggregate", "assd_foreground"])
+        .unwrap_or(f64::INFINITY);
+    let hd95_fg = read_nested_f64(&inference_metrics, &["aggregate", "hd95_foreground"])
+        .unwrap_or(f64::INFINITY);
 
     assert!(
         dice_fg >= MIN_DICE_FOREGROUND,
@@ -763,14 +821,16 @@ fn parity_dice_assd_hd95_hdmax_icc_full_volume_pipeline_should_generate_stage_be
     let rust_post_ms = post_t0.elapsed().as_secs_f64() * 1000.0;
 
     let rust_aseg_raw = postprocess_dir.join("rust_post_aseg.raw");
-    let mut aseg_file = fs::File::create(&rust_aseg_raw).expect("failed to create rust_post_aseg.raw");
+    let mut aseg_file =
+        fs::File::create(&rust_aseg_raw).expect("failed to create rust_post_aseg.raw");
     for value in &rust_aseg {
         aseg_file
             .write_all(&value.to_le_bytes())
             .expect("failed writing rust_post_aseg.raw");
     }
     let rust_brainmask_raw = postprocess_dir.join("rust_post_brainmask.raw");
-    fs::write(&rust_brainmask_raw, &rust_brainmask).expect("failed writing rust_post_brainmask.raw");
+    fs::write(&rust_brainmask_raw, &rust_brainmask)
+        .expect("failed writing rust_post_brainmask.raw");
 
     let python_aseg_nii = postprocess_dir.join("python_post_aseg.nii.gz");
     let python_brainmask_nii = postprocess_dir.join("python_post_brainmask.nii.gz");
@@ -832,8 +892,16 @@ fn parity_dice_assd_hd95_hdmax_icc_full_volume_pipeline_should_generate_stage_be
     copy_if_exists(&python_pred_benchmark, &python_benchmark_pred_copy)
         .expect("failed copying python benchmark pred artifact");
 
-    let rust_images_per_min = if rust_inf_ms > 0.0 { 60_000.0 / rust_inf_ms } else { 0.0 };
-    let python_images_per_min = if python_inf_ms > 0.0 { 60_000.0 / python_inf_ms } else { 0.0 };
+    let rust_images_per_min = if rust_inf_ms > 0.0 {
+        60_000.0 / rust_inf_ms
+    } else {
+        0.0
+    };
+    let python_images_per_min = if python_inf_ms > 0.0 {
+        60_000.0 / python_inf_ms
+    } else {
+        0.0
+    };
     let rust_vs_python_speedup = if python_inf_ms > 0.0 {
         python_inf_ms / rust_inf_ms.max(1e-9)
     } else {
@@ -856,7 +924,8 @@ fn parity_dice_assd_hd95_hdmax_icc_full_volume_pipeline_should_generate_stage_be
             },
         },
         rust_vs_python_speedup,
-        cpu_note: "cpu utilization and per-process cpu breakdown are not captured by this test yet".to_string(),
+        cpu_note: "cpu utilization and per-process cpu breakdown are not captured by this test yet"
+            .to_string(),
         memory_note: "peak RSS is not captured by this test yet".to_string(),
     };
 
@@ -933,7 +1002,8 @@ fn parity_dice_assd_hd95_hdmax_icc_full_volume_pipeline_should_generate_stage_be
     let report_path = run_dir.join("full_volume_parity_report.json");
     fs::write(
         &report_path,
-        serde_json::to_string_pretty(&report).expect("failed to serialize full volume parity report"),
+        serde_json::to_string_pretty(&report)
+            .expect("failed to serialize full volume parity report"),
     )
     .expect("failed writing full volume parity report json");
 

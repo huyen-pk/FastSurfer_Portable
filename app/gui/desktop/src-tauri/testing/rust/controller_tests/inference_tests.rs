@@ -1,11 +1,12 @@
+// This test suite integrates with test-containers for environment isolation.
 use super::support::{
-    create_backend_state_from_shell_script, create_backend_state_with_mocked_responses,
+    create_backend_state_via_shell_script, create_backend_state_with_fake_responses,
 };
 use crate::prediction::run_fastsurfer_inference_with_backend;
 
 #[test]
 fn predict_single_path_should_forward_progress_events_from_backend() {
-    let backend = create_backend_state_from_shell_script(
+    let backend = create_backend_state_via_shell_script(
         "while IFS= read -r _line; do printf '%s\\n' '{\"event\":\"progress\",\"progress\":2,\"message\":\"Processing MRI: 2%\"}'; printf '%s\\n' '{\"event\":\"progress\",\"progress\":71,\"message\":\"Processing MRI: 71%\"}'; printf '%s\\n' '{\"ok\":true,\"result\":{\"output_path\":\"/tmp/out/pred.mgz\",\"output_filename\":\"pred.mgz\",\"run_result\":\"ok\"}}'; done",
     );
 
@@ -29,7 +30,7 @@ fn predict_single_path_should_forward_progress_events_from_backend() {
 
 #[test]
 fn run_fastsurfer_inference_with_backend_should_merge_start_and_predict_results() {
-    let backend = create_backend_state_with_mocked_responses(&[
+    let backend = create_backend_state_with_fake_responses(&[
         r#"{"ok":true,"result":{"ack_message":"queued","requested_paths":["/in/a.nii.gz"]}}"#,
         r#"{"ok":true,"result":{"ack_message":"done","requested_paths":["/in/a.nii.gz"],"results":[{"input_path":"/in/a.nii.gz","output_path":"/tmp/out/a.mgz","output_filename":"a.mgz","run_result":"ok"}]}}"#,
     ]);

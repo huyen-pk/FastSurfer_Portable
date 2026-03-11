@@ -1,4 +1,5 @@
 import type { InferenceProgressEvent, ProcessInferenceResponse } from "../types/inference";
+export type { InferenceProgressEvent, ProcessInferenceResponse };
 
 export interface ProcessInferenceRequest {
   filePaths: string[];

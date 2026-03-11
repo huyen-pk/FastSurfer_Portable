@@ -13,15 +13,13 @@ pub mod utils;
 use crate::backend::BackendState;
 use crate::feature_flags::resolve_inference_engine;
 use crate::file_mgmt::open_result_in_file_manager;
-use crate::prediction::{
-    run_fastsurfer_inference, run_fastsurfer_inference_with_progress,
-};
-use crate::tasks::{cancel_fastsurfer_task, shutdown_backend_for_exit, AppState};
+use crate::prediction::{run_fastsurfer_inference, run_fastsurfer_inference_with_progress};
+use crate::tasks::{AppState, cancel_fastsurfer_task, shutdown_backend_for_exit};
 use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex};
+use tauri::Manager;
 #[cfg(mobile)]
 use tauri::MobileEntryPoint;
-use tauri::Manager;
 
 /// The main entry point for the desktop application.
 ///
@@ -77,10 +75,10 @@ pub fn run() {
         .run(|app_handle, event| {
             if let tauri::RunEvent::ExitRequested { .. } = event {
                 let app_state = app_handle.state::<AppState>();
-                if let Some(backend) = app_state.backend.as_ref() {
-                    if let Err(err) = backend.shutdown_for_exit() {
-                        eprintln!("Failed to gracefully stop backend on app exit: {err}");
-                    }
+                if let Some(backend) = app_state.backend.as_ref()
+                    && let Err(err) = backend.shutdown_for_exit()
+                {
+                    eprintln!("Failed to gracefully stop backend on app exit: {err}");
                 }
                 app_handle.exit(0);
             }

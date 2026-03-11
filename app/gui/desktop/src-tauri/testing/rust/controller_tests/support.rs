@@ -1,12 +1,11 @@
+// This test suite integrates with test-containers for environment isolation.
 use crate::backend::BackendState;
 use crate::inference::preprocess::{
     InferencePlane, load_input_volume, oriented_to_xyz, prepare_plane_input_for_slice,
     transformed_volume_shape,
 };
 use crate::inference::run_native_inference;
-use crate::process_mgmt::{
-    BackendLaunchCommand, BackendProcess, resolve_python_executable,
-};
+use crate::process_mgmt::{BackendLaunchCommand, BackendProcess, resolve_python_executable};
 use nifti::{IntoNdArray, NiftiObject, ReaderOptions};
 use std::fs;
 use std::io::{BufReader, Write};
@@ -23,7 +22,7 @@ pub(super) fn next_test_id() -> usize {
     NEXT_ID.fetch_add(1, Ordering::Relaxed)
 }
 
-pub(super) fn create_backend_state_with_mocked_responses(responses: &[&str]) -> BackendState {
+pub(super) fn create_backend_state_with_fake_responses(responses: &[&str]) -> BackendState {
     let mut branches = String::new();
     for (index, response) in responses.iter().enumerate() {
         branches.push_str(&format!("{index}) printf '%s\\n' '{response}' ;;"));
@@ -40,9 +39,12 @@ pub(super) fn create_backend_state_with_mocked_responses(responses: &[&str]) -> 
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
         .spawn()
-        .expect("failed to spawn mock backend process");
+        .expect("failed to spawn fake backend process");
 
-    let stdin = child.stdin.take().expect("failed to capture mock backend stdin");
+    let stdin = child
+        .stdin
+        .take()
+        .expect("failed to capture mock backend stdin");
     let stdout = child
         .stdout
         .take()
@@ -65,7 +67,7 @@ pub(super) fn create_backend_state_with_mocked_responses(responses: &[&str]) -> 
     }
 }
 
-pub(super) fn create_backend_state_from_shell_script(script: &str) -> BackendState {
+pub(super) fn create_backend_state_via_shell_script(script: &str) -> BackendState {
     let mut child = Command::new("sh")
         .arg("-c")
         .arg(script)
@@ -101,11 +103,8 @@ pub(super) fn create_backend_state_from_shell_script(script: &str) -> BackendSta
     }
 }
 
-pub(super) fn create_backend_state_from_process(mut child: std::process::Child) -> BackendState {
-    let stdin = child
-        .stdin
-        .take()
-        .expect("failed to capture process stdin");
+pub(super) fn create_backend_state_via_process(mut child: std::process::Child) -> BackendState {
+    let stdin = child.stdin.take().expect("failed to capture process stdin");
     let stdout = child
         .stdout
         .take()
@@ -140,7 +139,7 @@ pub(super) fn spawn_python_backend_inline(script: &str) -> Option<BackendState> 
         .spawn()
         .ok()?;
 
-    Some(create_backend_state_from_process(child))
+    Some(create_backend_state_via_process(child))
 }
 
 pub(super) fn find_repo_root() -> Option<PathBuf> {
@@ -230,11 +229,15 @@ pub(super) fn resolve_python_with_component_runtime(repo_root: &Path) -> Option<
 }
 
 pub(super) fn fixture_native_input(repo_root: &Path) -> PathBuf {
-    repo_root.join("app/gui/desktop/src-tauri/testing/data/.tmp_e2e_output_py/140_orig.native_input.nii.gz")
+    repo_root.join(
+        "app/gui/desktop/src-tauri/testing/data/.tmp_e2e_output_py/140_orig.native_input.nii.gz",
+    )
 }
 
 pub(super) fn fixture_python_pred(repo_root: &Path) -> PathBuf {
-    repo_root.join("app/gui/desktop/src-tauri/testing/data/.tmp_e2e_output_py/140_orig.python_pred.nii.gz")
+    repo_root.join(
+        "app/gui/desktop/src-tauri/testing/data/.tmp_e2e_output_py/140_orig.python_pred.nii.gz",
+    )
 }
 
 pub(super) fn convert_mgz_to_nii_gz(
@@ -326,9 +329,12 @@ fn load_nifti_labels_as_i32(path: &Path) -> Result<(Vec<i32>, Vec<usize>), Strin
         .map_err(|error| format!("failed to read NIfTI '{}': {error}", path.display()))?;
 
     let volume = obj.into_volume();
-    let array = volume
-        .into_ndarray::<f32>()
-        .map_err(|error| format!("failed to convert NIfTI '{}' into ndarray: {error}", path.display()))?;
+    let array = volume.into_ndarray::<f32>().map_err(|error| {
+        format!(
+            "failed to convert NIfTI '{}' into ndarray: {error}",
+            path.display()
+        )
+    })?;
 
     let shape = array.shape().to_vec();
     let labels = array
@@ -387,7 +393,11 @@ pub(super) fn compare_label_volumes_per_plane_single_slice_in_rust(
         (gold_shape_xyz[2] - compare_shape_xyz[2]) / 2,
     ];
 
-    for plane in [InferencePlane::Coronal, InferencePlane::Axial, InferencePlane::Sagittal] {
+    for plane in [
+        InferencePlane::Coronal,
+        InferencePlane::Axial,
+        InferencePlane::Sagittal,
+    ] {
         let [h, w, slices] = transformed_volume_shape(compare_shape_xyz, plane);
         if slices == 0 {
             return Err(format!("plane {} has zero slices", plane.as_str()));
@@ -407,12 +417,10 @@ pub(super) fn compare_label_volumes_per_plane_single_slice_in_rust(
                 let gy = y + gold_offset_xyz[1];
                 let gz = z + gold_offset_xyz[2];
 
-                let rust_offset = (rx * rust_shape_xyz[1] * rust_shape_xyz[2])
-                    + (ry * rust_shape_xyz[2])
-                    + rz;
-                let gold_offset = (gx * gold_shape_xyz[1] * gold_shape_xyz[2])
-                    + (gy * gold_shape_xyz[2])
-                    + gz;
+                let rust_offset =
+                    (rx * rust_shape_xyz[1] * rust_shape_xyz[2]) + (ry * rust_shape_xyz[2]) + rz;
+                let gold_offset =
+                    (gx * gold_shape_xyz[1] * gold_shape_xyz[2]) + (gy * gold_shape_xyz[2]) + gz;
 
                 if rust_labels[rust_offset] != gold_labels[gold_offset] {
                     diff += 1;
@@ -443,17 +451,25 @@ pub(super) fn compare_label_volumes_per_plane_single_slice_in_rust(
     Ok(())
 }
 
-pub(super) fn ensure_native_input_nifti(repo_root: &Path, python_bin: &str) -> Result<PathBuf, String> {
+pub(super) fn ensure_native_input_nifti(
+    repo_root: &Path,
+    python_bin: &str,
+) -> Result<PathBuf, String> {
     let fixture_dir = repo_root.join("app/gui/desktop/src-tauri/testing/data/.tmp_e2e_output_py");
-    fs::create_dir_all(&fixture_dir)
-        .map_err(|error| format!("failed to create fixture directory '{}': {error}", fixture_dir.display()))?;
+    fs::create_dir_all(&fixture_dir).map_err(|error| {
+        format!(
+            "failed to create fixture directory '{}': {error}",
+            fixture_dir.display()
+        )
+    })?;
 
     let input_nii = fixture_dir.join("140_orig.native_input.nii.gz");
     if input_nii.exists() {
         return Ok(input_nii);
     }
 
-    let input_mgz = repo_root.join("app/gui/desktop/src-tauri/testing/data/Subject140/140_orig.mgz");
+    let input_mgz =
+        repo_root.join("app/gui/desktop/src-tauri/testing/data/Subject140/140_orig.mgz");
     if !input_mgz.exists() {
         return Err(format!("missing test input file: {}", input_mgz.display()));
     }
@@ -472,20 +488,36 @@ pub(super) fn compare_preprocess_slice_with_python(
     slice_index: usize,
 ) -> Result<(), String> {
     let volume = load_input_volume(&input_nii.to_string_lossy())?;
-    let prepared = prepare_plane_input_for_slice(&volume, plane, num_channels, base_res, slice_index)?;
+    let prepared =
+        prepare_plane_input_for_slice(&volume, plane, num_channels, base_res, slice_index)?;
 
-    let run_dir = std::env::temp_dir().join(format!("preproc_parity_{}_{}", next_test_id(), plane.as_str()));
-    fs::create_dir_all(&run_dir)
-        .map_err(|error| format!("failed creating temp preprocess parity directory '{}': {error}", run_dir.display()))?;
+    let run_dir = std::env::temp_dir().join(format!(
+        "preproc_parity_{}_{}",
+        next_test_id(),
+        plane.as_str()
+    ));
+    fs::create_dir_all(&run_dir).map_err(|error| {
+        format!(
+            "failed creating temp preprocess parity directory '{}': {error}",
+            run_dir.display()
+        )
+    })?;
 
     let rust_raw = run_dir.join("rust_tensor.raw");
-    let mut raw_file = fs::File::create(&rust_raw)
-        .map_err(|error| format!("failed creating rust raw tensor file '{}': {error}", rust_raw.display()))?;
+    let mut raw_file = fs::File::create(&rust_raw).map_err(|error| {
+        format!(
+            "failed creating rust raw tensor file '{}': {error}",
+            rust_raw.display()
+        )
+    })?;
 
     for value in &prepared.tensor_data {
-        raw_file
-            .write_all(&value.to_le_bytes())
-            .map_err(|error| format!("failed writing rust raw tensor file '{}': {error}", rust_raw.display()))?;
+        raw_file.write_all(&value.to_le_bytes()).map_err(|error| {
+            format!(
+                "failed writing rust raw tensor file '{}': {error}",
+                rust_raw.display()
+            )
+        })?;
     }
 
     let shape_csv = prepared
@@ -675,8 +707,14 @@ pub(super) fn run_native_inference_with_timeout(
             "native rust inference timed out after {}s",
             timeout.as_secs()
         )),
-        Err(mpsc::RecvTimeoutError::Disconnected) => Err(
-            "native rust inference worker disconnected before returning a result".to_string(),
-        ),
+        Err(mpsc::RecvTimeoutError::Disconnected) => {
+            Err("native rust inference worker disconnected before returning a result".to_string())
+        }
     }
+}
+
+pub(super) fn setup_test_app() -> tauri::App<tauri::test::MockRuntime> {
+    tauri::test::mock_builder()
+        .build(tauri::generate_context!())
+        .unwrap()
 }

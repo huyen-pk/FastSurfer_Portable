@@ -1,5 +1,6 @@
+// This test suite integrates with test-containers for environment isolation.
 use super::support::{
-    create_backend_state_with_mocked_responses, find_repo_root, fixture_python_pred, next_test_id,
+    create_backend_state_with_fake_responses, find_repo_root, fixture_python_pred, next_test_id,
     resolve_python_with_component_runtime,
 };
 use crate::inference::postprocess::{
@@ -12,7 +13,7 @@ use std::process::Command;
 
 #[test]
 fn predict_batch_with_result_entries_should_return_ack_and_deduplicated_directories() {
-    let backend = create_backend_state_with_mocked_responses(&[
+    let backend = create_backend_state_with_fake_responses(&[
         r#"{"ok":true,"result":{"ack_message":"done","requested_paths":["x"],"results":[{"input_path":"/in/a.nii.gz","output_path":"/tmp/out/a.mgz","output_filename":"a.mgz","run_result":"ok"},{"input_path":"/in/b.nii.gz","output_path":"/tmp/out/b.mgz","output_filename":"b.mgz","run_result":1}]}}"#,
     ]);
 
@@ -28,7 +29,7 @@ fn predict_batch_with_result_entries_should_return_ack_and_deduplicated_director
 
 #[test]
 fn predict_batch_without_requested_paths_should_use_fallback_requested_paths() {
-    let backend = create_backend_state_with_mocked_responses(&[
+    let backend = create_backend_state_with_fake_responses(&[
         r#"{"ok":true,"result":{"ack_message":"done","results":[{"input_path":"/in/a.nii.gz","output_path":"/tmp/out/a.mgz","output_filename":"a.mgz","run_result":"ok"}]}}"#,
     ]);
 
@@ -77,7 +78,8 @@ fn parity_postprocessing_should_match_original_python_components_on_python_pred_
     mask_aseg_with_brainmask(&mut rust_aseg, &rust_brainmask);
     flip_wm_islands(&mut rust_aseg, shape);
 
-    let run_dir = std::env::temp_dir().join(format!("postprocess_component_parity_{}", next_test_id()));
+    let run_dir =
+        std::env::temp_dir().join(format!("postprocess_component_parity_{}", next_test_id()));
     fs::create_dir_all(&run_dir).expect("failed to create temp postprocessing parity directory");
 
     let rust_aseg_raw = run_dir.join("rust_aseg.raw");

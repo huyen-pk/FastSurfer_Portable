@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
 
+#[derive(Clone)]
 pub(crate) struct OnnxModelRegistry {
     pub axial_model_path: String,
     pub coronal_model_path: String,
@@ -14,6 +15,7 @@ pub(crate) struct OnnxModelRegistry {
     pub source_dir: String,
 }
 
+#[derive(Clone)]
 pub(crate) struct NativeOnnxSessions {
     pub axial: PlaneSession,
     pub coronal: PlaneSession,
@@ -21,6 +23,7 @@ pub(crate) struct NativeOnnxSessions {
     pub registry: OnnxModelRegistry,
 }
 
+#[derive(Clone)]
 pub(crate) struct PlaneSession {
     pub session: Arc<Mutex<Session>>,
     pub model_path: String,
@@ -65,17 +68,16 @@ fn ensure_ort_initialized() -> Result<(), String> {
         return Ok(());
     }
 
-    if std::env::var_os("ORT_DYLIB_PATH").is_none() {
-        if let Some(path) = resolve_ort_dylib_path() {
-            unsafe {
-                std::env::set_var("ORT_DYLIB_PATH", path.to_string_lossy().to_string());
-            }
-        }
+    let init = if std::env::var_os("ORT_DYLIB_PATH").is_none()
+        && let Some(path) = resolve_ort_dylib_path()
+    {
+        ort::init_from(path)
+    } else {
+        Ok(ort::init())
     }
+    .map_err(|e| e.to_string())?;
 
-    let _ = ort::init()
-        .with_name("fastsurfer-desktop")
-        .commit();
+    let _ = init.with_name("fastsurfer-desktop").commit();
 
     let _ = ORT_INIT.set(());
     Ok(())
@@ -95,34 +97,51 @@ fn resolve_ort_dylib_path() -> Option<PathBuf> {
     if let Ok(cwd) = std::env::current_dir() {
         for name in names {
             candidates.push(cwd.join(name));
-            candidates.push(cwd.join("resources").join("ort").join(platform_folder()).join(name));
+            candidates.push(
+                cwd.join("resources")
+                    .join("ort")
+                    .join(platform_folder())
+                    .join(name),
+            );
         }
     }
 
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(exe_dir) = exe.parent() {
-            for name in names {
-                candidates.push(exe_dir.join(name));
-                candidates.push(exe_dir.join("resources").join("ort").join(platform_folder()).join(name));
-                candidates.push(exe_dir.join("_internal").join(name));
-                candidates.push(exe_dir.join("..").join("Resources").join(name));
-                candidates.push(
-                    exe_dir
-                        .join("..")
-                        .join("Resources")
-                        .join("ort")
-                        .join(platform_folder())
-                        .join(name),
-                );
-            }
-
-            candidates.extend(find_ort_dylibs_near(exe_dir, 3));
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(exe_dir) = exe.parent()
+    {
+        for name in names {
+            candidates.push(exe_dir.join(name));
+            candidates.push(
+                exe_dir
+                    .join("resources")
+                    .join("ort")
+                    .join(platform_folder())
+                    .join(name),
+            );
+            candidates.push(exe_dir.join("_internal").join(name));
+            candidates.push(exe_dir.join("..").join("Resources").join(name));
+            candidates.push(
+                exe_dir
+                    .join("..")
+                    .join("Resources")
+                    .join("ort")
+                    .join(platform_folder())
+                    .join(name),
+            );
         }
+
+        candidates.extend(find_ort_dylibs_near(exe_dir, 3));
     }
 
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     for name in names {
-        candidates.push(manifest_dir.join("resources").join("ort").join(platform_folder()).join(name));
+        candidates.push(
+            manifest_dir
+                .join("resources")
+                .join("ort")
+                .join(platform_folder())
+                .join(name),
+        );
     }
 
     candidates
@@ -140,10 +159,10 @@ fn find_ort_dylibs_near(root: &Path, max_depth: usize) -> Vec<PathBuf> {
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_file() {
-                if let Some(name) = path.file_name().and_then(|name| name.to_str()) {
-                    if is_ort_dylib_filename(name) {
-                        found.push(path);
-                    }
+                if let Some(name) = path.file_name().and_then(|name| name.to_str())
+                    && is_ort_dylib_filename(name)
+                {
+                    found.push(path);
                 }
             } else if path.is_dir() {
                 found.extend(find_ort_dylibs_near(&path, max_depth.saturating_sub(1)));
@@ -210,12 +229,20 @@ impl OnnxModelRegistry {
         let candidate_dirs = candidate_onnx_dirs();
 
         for dir in &candidate_dirs {
-            let axial = find_model(dir, &["FastSurferVINN_Axial.onnx", "FastSurferVINN_axial.onnx"]);
-            let coronal =
-                find_model(dir, &["FastSurferVINN_Coronal.onnx", "FastSurferVINN_coronal.onnx"]);
+            let axial = find_model(
+                dir,
+                &["FastSurferVINN_Axial.onnx", "FastSurferVINN_axial.onnx"],
+            );
+            let coronal = find_model(
+                dir,
+                &["FastSurferVINN_Coronal.onnx", "FastSurferVINN_coronal.onnx"],
+            );
             let sagittal = find_model(
                 dir,
-                &["FastSurferVINN_Sagittal.onnx", "FastSurferVINN_sagittal.onnx"],
+                &[
+                    "FastSurferVINN_Sagittal.onnx",
+                    "FastSurferVINN_sagittal.onnx",
+                ],
             );
 
             if let (Some(axial_path), Some(coronal_path), Some(sagittal_path)) =
@@ -252,20 +279,32 @@ impl NativeOnnxSessions {
         let t_ax = Instant::now();
         let axial = load_runnable_model(&registry.axial_model_path, "axial")?;
         if trace_timing {
-            eprintln!("[trace][ort-onnx] loaded axial model in {} ms", t_ax.elapsed().as_millis());
+            eprintln!(
+                "[trace][ort-onnx] loaded axial model in {} ms",
+                t_ax.elapsed().as_millis()
+            );
         }
 
         let t_cor = Instant::now();
         let coronal = load_runnable_model(&registry.coronal_model_path, "coronal")?;
         if trace_timing {
-            eprintln!("[trace][ort-onnx] loaded coronal model in {} ms", t_cor.elapsed().as_millis());
+            eprintln!(
+                "[trace][ort-onnx] loaded coronal model in {} ms",
+                t_cor.elapsed().as_millis()
+            );
         }
 
         let t_sag = Instant::now();
         let sagittal = load_runnable_model(&registry.sagittal_model_path, "sagittal")?;
         if trace_timing {
-            eprintln!("[trace][ort-onnx] loaded sagittal model in {} ms", t_sag.elapsed().as_millis());
-            eprintln!("[trace][ort-onnx] total session load {} ms", t0.elapsed().as_millis());
+            eprintln!(
+                "[trace][ort-onnx] loaded sagittal model in {} ms",
+                t_sag.elapsed().as_millis()
+            );
+            eprintln!(
+                "[trace][ort-onnx] total session load {} ms",
+                t0.elapsed().as_millis()
+            );
         }
 
         Ok(Self {
@@ -277,11 +316,11 @@ impl NativeOnnxSessions {
     }
 
     pub(crate) fn run_dummy_probe(&self) -> Result<Vec<String>, String> {
-        let mut probe_lines = Vec::new();
-        probe_lines.push(self.axial.run_dummy_probe("axial")?);
-        probe_lines.push(self.coronal.run_dummy_probe("coronal")?);
-        probe_lines.push(self.sagittal.run_dummy_probe("sagittal")?);
-        Ok(probe_lines)
+        Ok(vec![
+            self.axial.run_dummy_probe("axial")?,
+            self.coronal.run_dummy_probe("coronal")?,
+            self.sagittal.run_dummy_probe("sagittal")?,
+        ])
     }
 }
 
@@ -417,9 +456,7 @@ impl PlaneSession {
             .ok_or_else(|| format!("{plane}: model has no declared graph outputs"))?;
 
         let primary = outputs.get(primary_name).ok_or_else(|| {
-            format!(
-                "{plane}: expected output '{primary_name}' not found in ORT outputs"
-            )
+            format!("{plane}: expected output '{primary_name}' not found in ORT outputs")
         })?;
 
         let (shape, tensor_data) = primary
@@ -430,7 +467,9 @@ impl PlaneSession {
             .iter()
             .map(|dim| {
                 if *dim < 0 {
-                    Err(format!("{plane}: dynamic output shape is not supported: {shape:?}"))
+                    Err(format!(
+                        "{plane}: dynamic output shape is not supported: {shape:?}"
+                    ))
                 } else {
                     Ok(*dim as usize)
                 }
@@ -453,14 +492,14 @@ impl PlaneSession {
 
         let mut output_shapes = Vec::<Vec<usize>>::new();
         for name in &self.output_names {
-            if let Some(value) = outputs.get(name) {
-                if let Ok((dims, _)) = value.try_extract_tensor::<f32>() {
-                    let parsed = dims
-                        .iter()
-                        .map(|dim| if *dim < 0 { 0usize } else { *dim as usize })
-                        .collect::<Vec<usize>>();
-                    output_shapes.push(parsed);
-                }
+            if let Some(value) = outputs.get(name)
+                && let Ok((dims, _)) = value.try_extract_tensor::<f32>()
+            {
+                let parsed = dims
+                    .iter()
+                    .map(|dim| if *dim < 0 { 0usize } else { *dim as usize })
+                    .collect::<Vec<usize>>();
+                output_shapes.push(parsed);
             }
         }
 
@@ -479,18 +518,16 @@ fn load_runnable_model(path: &str, plane: &str) -> Result<PlaneSession, String> 
         .map_err(|error| format!("Failed to create ORT session builder for {plane}: {error}"))?;
 
     if let Some(thread_count) = ort_cpu_threads_override() {
-        builder = builder
-            .with_intra_threads(thread_count)
-            .map_err(|error| {
-                format!(
-                    "Failed to configure ORT intra-op threads ({thread_count}) for {plane}: {error}"
-                )
-            })?;
+        builder = builder.with_intra_threads(thread_count).map_err(|error| {
+            format!(
+                "Failed to configure ORT intra-op threads ({thread_count}) for {plane}: {error}"
+            )
+        })?;
     }
 
-    let session = builder
-        .commit_from_file(path)
-        .map_err(|error| format!("Failed to load {plane} ONNX model in ORT at '{path}': {error}"))?;
+    let session = builder.commit_from_file(path).map_err(|error| {
+        format!("Failed to load {plane} ONNX model in ORT at '{path}': {error}")
+    })?;
 
     let initializers = session
         .overridable_initializers()
@@ -509,7 +546,12 @@ fn load_runnable_model(path: &str, plane: &str) -> Result<PlaneSession, String> 
         .inputs()
         .iter()
         .filter(|input| !initializers.contains(input.name()))
-        .map(|input| (input.name().to_string(), dims_from_value_type(input.dtype())))
+        .map(|input| {
+            (
+                input.name().to_string(),
+                dims_from_value_type(input.dtype()),
+            )
+        })
         .collect::<HashMap<String, Option<Vec<usize>>>>();
 
     let input_name = required_input_names
@@ -602,13 +644,13 @@ fn candidate_onnx_dirs() -> Vec<PathBuf> {
         candidates.push(cwd.join("..").join("..").join("..").join("..").join("onnx"));
     }
 
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(exe_dir) = exe.parent() {
-            candidates.push(exe_dir.join("onnx"));
-            candidates.push(exe_dir.join("_internal").join("onnx"));
-            candidates.push(exe_dir.join("..").join("Resources").join("onnx"));
-            candidates.push(exe_dir.join("..").join("..").join("onnx"));
-        }
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(exe_dir) = exe.parent()
+    {
+        candidates.push(exe_dir.join("onnx"));
+        candidates.push(exe_dir.join("_internal").join("onnx"));
+        candidates.push(exe_dir.join("..").join("Resources").join("onnx"));
+        candidates.push(exe_dir.join("..").join("..").join("onnx"));
     }
 
     let mut seen: BTreeSet<String> = BTreeSet::new();

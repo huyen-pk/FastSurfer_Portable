@@ -1,3 +1,4 @@
+// This test suite integrates with test-containers for environment isolation.
 use crate::prediction::run_fastsurfer_inference_with_app_state;
 use crate::process_mgmt::{resolve_backend_binary_path_from, resolve_backend_launch_command_from};
 use std::fs;

@@ -21,7 +21,10 @@ pub fn validate_result_path(result_path: &str) -> Result<PathBuf, String> {
 
     let canonical_path = raw_path.canonicalize().map_err(|e| {
         if e.kind() == std::io::ErrorKind::PermissionDenied {
-            format!("Permission denied when resolving path: {}", raw_path.display())
+            format!(
+                "Permission denied when resolving path: {}",
+                raw_path.display()
+            )
         } else {
             format!("Failed to resolve path {}: {e}", raw_path.display())
         }
