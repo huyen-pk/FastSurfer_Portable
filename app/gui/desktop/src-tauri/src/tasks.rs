@@ -39,7 +39,9 @@ pub fn cancel_fastsurfer_task(
 
 /// Gracefully shuts down the backend process before the application exits.
 #[tauri::command]
-pub fn shutdown_backend_for_exit(app_state: State<'_, AppState>) -> Result<(), String> {
+pub fn shutdown_backend_for_exit(
+    app_state: State<'_, AppState>,
+) -> Result<(), String> {
     if let Some(backend) = app_state.backend.as_ref() {
         backend.shutdown_for_exit()?;
     }

@@ -47,7 +47,10 @@ fn native_trace_timing_enabled() -> bool {
     std::env::var("FASTSURFER_NATIVE_TRACE_TIMING")
         .map(|value| {
             let normalized = value.trim().to_ascii_lowercase();
-            normalized == "1" || normalized == "true" || normalized == "yes" || normalized == "on"
+            normalized == "1"
+                || normalized == "true"
+                || normalized == "yes"
+                || normalized == "on"
         })
         .unwrap_or(false)
 }
@@ -113,8 +116,12 @@ impl OnnxModelRegistry {
             {
                 return Ok(Self {
                     axial_model_path: axial_path.to_string_lossy().to_string(),
-                    coronal_model_path: coronal_path.to_string_lossy().to_string(),
-                    sagittal_model_path: sagittal_path.to_string_lossy().to_string(),
+                    coronal_model_path: coronal_path
+                        .to_string_lossy()
+                        .to_string(),
+                    sagittal_model_path: sagittal_path
+                        .to_string_lossy()
+                        .to_string(),
                     source_dir: dir.to_string_lossy().to_string(),
                 });
             }
@@ -138,8 +145,8 @@ impl NativeOnnxSessions {
         let trace_timing = native_trace_timing_enabled();
         let t0 = Instant::now();
         if trace_timing {
-            let requested =
-                std::env::var("FASTSURFER_NATIVE_DEVICE").unwrap_or_else(|_| "cpu".to_string());
+            let requested = std::env::var("FASTSURFER_NATIVE_DEVICE")
+                .unwrap_or_else(|_| "cpu".to_string());
             let resolved = resolve_native_device_mode();
             eprintln!(
                 "[trace][native-onnx] requested_device={} resolved_device={} cuda_available={} metal_available={} rayon_threads={}",
@@ -149,7 +156,8 @@ impl NativeOnnxSessions {
                 candle::utils::metal_is_available(),
                 candle::utils::get_num_threads()
             );
-            if (requested.eq_ignore_ascii_case("gpu") || requested.eq_ignore_ascii_case("cuda"))
+            if (requested.eq_ignore_ascii_case("gpu")
+                || requested.eq_ignore_ascii_case("cuda"))
                 && resolved == "cpu"
             {
                 eprintln!(
@@ -169,7 +177,8 @@ impl NativeOnnxSessions {
         }
 
         let t_cor = Instant::now();
-        let coronal = load_runnable_model(&registry.coronal_model_path, "coronal")?;
+        let coronal =
+            load_runnable_model(&registry.coronal_model_path, "coronal")?;
         if trace_timing {
             eprintln!(
                 "[trace][native-onnx] loaded coronal model in {} ms",
@@ -178,7 +187,8 @@ impl NativeOnnxSessions {
         }
 
         let t_sag = Instant::now();
-        let sagittal = load_runnable_model(&registry.sagittal_model_path, "sagittal")?;
+        let sagittal =
+            load_runnable_model(&registry.sagittal_model_path, "sagittal")?;
         if trace_timing {
             eprintln!(
                 "[trace][native-onnx] loaded sagittal model in {} ms",
@@ -226,7 +236,9 @@ impl PlaneSession {
         let element_count = shape
             .iter()
             .try_fold(1usize, |acc, dim| acc.checked_mul(*dim))
-            .ok_or_else(|| format!("{plane}: input shape overflow for {shape:?}"))?;
+            .ok_or_else(|| {
+                format!("{plane}: input shape overflow for {shape:?}")
+            })?;
 
         let max_probe_elements = 16_000_000usize;
         if element_count > max_probe_elements {
@@ -324,8 +336,9 @@ impl PlaneSession {
             let model = Arc::clone(&self.model);
             let plane_name = plane.to_string();
             thread::spawn(move || {
-                let result = simple_eval(&model, inputs)
-                    .map_err(|error| format!("{plane_name}: ONNX forward pass failed: {error}"));
+                let result = simple_eval(&model, inputs).map_err(|error| {
+                    format!("{plane_name}: ONNX forward pass failed: {error}")
+                });
                 let _ = tx.send(result);
             });
 
@@ -344,8 +357,9 @@ impl PlaneSession {
                 }
             }
         } else {
-            simple_eval(&self.model, inputs)
-                .map_err(|error| format!("{plane}: ONNX forward pass failed: {error}"))?
+            simple_eval(&self.model, inputs).map_err(|error| {
+                format!("{plane}: ONNX forward pass failed: {error}")
+            })?
         };
         if trace_timing {
             eprintln!(
@@ -362,10 +376,9 @@ impl PlaneSession {
             .collect::<Vec<String>>()
             .join(", ");
 
-        let primary_name = self
-            .output_names
-            .first()
-            .ok_or_else(|| format!("{plane}: model has no declared graph outputs"))?;
+        let primary_name = self.output_names.first().ok_or_else(|| {
+            format!("{plane}: model has no declared graph outputs")
+        })?;
 
         let primary = outputs.get(primary_name).ok_or_else(|| {
             format!(
@@ -397,16 +410,20 @@ impl PlaneSession {
         let primary_f32 = if primary.dtype() == DType::F32 {
             primary.clone()
         } else {
-            primary
-                .to_dtype(DType::F32)
-                .map_err(|error| format!("{plane}: failed to cast output tensor to f32: {error}"))?
+            primary.to_dtype(DType::F32).map_err(|error| {
+                format!("{plane}: failed to cast output tensor to f32: {error}")
+            })?
         };
 
         let logits = primary_f32
             .flatten_all()
-            .map_err(|error| format!("{plane}: failed to flatten output tensor: {error}"))?
+            .map_err(|error| {
+                format!("{plane}: failed to flatten output tensor: {error}")
+            })?
             .to_vec1::<f32>()
-            .map_err(|error| format!("{plane}: failed to read output tensor as f32: {error}"))?;
+            .map_err(|error| {
+                format!("{plane}: failed to read output tensor as f32: {error}")
+            })?;
 
         Ok(PlaneRunResult {
             logits,
@@ -416,9 +433,13 @@ impl PlaneSession {
     }
 }
 
-fn load_runnable_model(path: &str, plane: &str) -> Result<PlaneSession, String> {
-    let mut model = read_file(path)
-        .map_err(|error| format!("Failed to parse {plane} ONNX model at '{path}': {error}"))?;
+fn load_runnable_model(
+    path: &str,
+    plane: &str,
+) -> Result<PlaneSession, String> {
+    let mut model = read_file(path).map_err(|error| {
+        format!("Failed to parse {plane} ONNX model at '{path}': {error}")
+    })?;
 
     hydrate_external_initializers(path, &mut model, plane)?;
     rewrite_scalar_prelu_nodes(&mut model);
@@ -426,7 +447,9 @@ fn load_runnable_model(path: &str, plane: &str) -> Result<PlaneSession, String> 
     rewrite_maxpool_extra_outputs(&mut model);
 
     let graph = model.graph.as_ref().ok_or_else(|| {
-        format!("Failed to load {plane} ONNX model at '{path}': graph is missing")
+        format!(
+            "Failed to load {plane} ONNX model at '{path}': graph is missing"
+        )
     })?;
 
     let initializers = graph
@@ -460,7 +483,9 @@ fn load_runnable_model(path: &str, plane: &str) -> Result<PlaneSession, String> 
         })
         .cloned()
         .or_else(|| required_input_names.first().cloned())
-        .ok_or_else(|| format!("Failed to discover {plane} ONNX input name at '{path}'"))?;
+        .ok_or_else(|| {
+            format!("Failed to discover {plane} ONNX input name at '{path}'")
+        })?;
 
     let output_names = graph
         .output
@@ -694,7 +719,8 @@ fn rewrite_max_nodes(model: &mut onnx::ModelProto) {
         return;
     };
 
-    let mut rewritten_nodes = Vec::<onnx::NodeProto>::with_capacity(graph.node.len());
+    let mut rewritten_nodes =
+        Vec::<onnx::NodeProto>::with_capacity(graph.node.len());
     let mut rewrite_index = 0usize;
 
     for node in graph.node.iter() {
@@ -778,7 +804,8 @@ fn rewrite_maxpool_extra_outputs(model: &mut onnx::ModelProto) {
         return;
     };
 
-    let mut rewritten_nodes = Vec::<onnx::NodeProto>::with_capacity(graph.node.len());
+    let mut rewritten_nodes =
+        Vec::<onnx::NodeProto>::with_capacity(graph.node.len());
 
     for node in graph.node.iter() {
         if node.op_type != "MaxPool" || node.output.len() <= 1 {
@@ -797,9 +824,12 @@ fn rewrite_maxpool_extra_outputs(model: &mut onnx::ModelProto) {
             node.name.clone()
         };
 
-        for (output_idx, extra_output) in node.output.iter().skip(1).enumerate() {
-            let zeros_like_output = format!("{node_name}_extra_zeros_like_{output_idx}");
-            let zeros_i64_output = format!("{node_name}_extra_zeros_i64_{output_idx}");
+        for (output_idx, extra_output) in node.output.iter().skip(1).enumerate()
+        {
+            let zeros_like_output =
+                format!("{node_name}_extra_zeros_like_{output_idx}");
+            let zeros_i64_output =
+                format!("{node_name}_extra_zeros_i64_{output_idx}");
             rewritten_nodes.push(onnx::NodeProto {
                 input: vec![primary_output.clone(), primary_output.clone()],
                 output: vec![zeros_like_output.clone()],
@@ -866,7 +896,9 @@ fn dims_from_value_info(value: &onnx::ValueInfoProto) -> Option<Vec<usize>> {
         .dim
         .iter()
         .map(|dim| match dim.value.as_ref()? {
-            onnx::tensor_shape_proto::dimension::Value::DimValue(v) => Some(*v as usize),
+            onnx::tensor_shape_proto::dimension::Value::DimValue(v) => {
+                Some(*v as usize)
+            }
             onnx::tensor_shape_proto::dimension::Value::DimParam(_) => None,
         })
         .collect::<Option<Vec<usize>>>()
@@ -895,7 +927,8 @@ fn candidate_onnx_dirs() -> Vec<PathBuf> {
 
     if let Ok(cwd) = std::env::current_dir() {
         candidates.push(cwd.join("onnx"));
-        candidates.push(cwd.join("..").join("..").join("..").join("..").join("onnx"));
+        candidates
+            .push(cwd.join("..").join("..").join("..").join("..").join("onnx"));
     }
 
     if let Ok(exe) = std::env::current_exe()

@@ -69,14 +69,19 @@ fn bench_forward_enabled() -> bool {
     std::env::var("FASTSURFER_BENCH_FORWARD")
         .map(|value| {
             let normalized = value.trim().to_ascii_lowercase();
-            normalized == "1" || normalized == "true" || normalized == "yes" || normalized == "on"
+            normalized == "1"
+                || normalized == "true"
+                || normalized == "yes"
+                || normalized == "on"
         })
         .unwrap_or(false)
 }
 
 fn prepare_state() -> Result<BenchState, String> {
-    let repo_root = find_repo_root().ok_or_else(|| "failed to locate repo root".to_string())?;
-    let fixture_dir = repo_root.join("app/gui/desktop/src-tauri/testing/data/.tmp_e2e_output_py");
+    let repo_root = find_repo_root()
+        .ok_or_else(|| "failed to locate repo root".to_string())?;
+    let fixture_dir = repo_root
+        .join("app/gui/desktop/src-tauri/testing/data/.tmp_e2e_output_py");
     let input_nii = fixture_dir.join("140_orig.native_input.nii.gz");
     if !input_nii.exists() {
         return Err(format!(
@@ -99,8 +104,10 @@ fn prepare_state() -> Result<BenchState, String> {
 
     let sessions = onnx_loader::NativeOnnxSessions::load_default()?;
     let volume = preprocess::load_input_volume(&input_nii.to_string_lossy())?;
-    let [_, _, coronal_slices] =
-        preprocess::transformed_volume_shape(volume.shape_xyz, preprocess::InferencePlane::Coronal);
+    let [_, _, coronal_slices] = preprocess::transformed_volume_shape(
+        volume.shape_xyz,
+        preprocess::InferencePlane::Coronal,
+    );
     if coronal_slices == 0 {
         return Err("coronal slices is zero".to_string());
     }
@@ -121,7 +128,8 @@ fn bench_preprocess_and_forward(c: &mut Criterion) {
         }
     };
 
-    let coronal_channels = channel_count_from_shape(&state.sessions.coronal.input_shape);
+    let coronal_channels =
+        channel_count_from_shape(&state.sessions.coronal.input_shape);
 
     let mut load_group = c.benchmark_group("native_model_load");
     load_group.measurement_time(Duration::from_secs(6));
@@ -178,7 +186,9 @@ fn bench_preprocess_and_forward(c: &mut Criterion) {
             )
         });
         if let Err(error) = warmup {
-            eprintln!("[bench] forward warmup failed (skipping forward bench): {error}");
+            eprintln!(
+                "[bench] forward warmup failed (skipping forward bench): {error}"
+            );
             return;
         }
 

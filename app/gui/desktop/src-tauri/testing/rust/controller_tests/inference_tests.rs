@@ -1,6 +1,7 @@
 // This test suite integrates with test-containers for environment isolation.
 use super::support::{
-    create_backend_state_via_shell_script, create_backend_state_with_fake_responses,
+    create_backend_state_via_shell_script,
+    create_backend_state_with_fake_responses,
 };
 use crate::prediction::run_fastsurfer_inference_with_backend;
 
@@ -29,7 +30,8 @@ fn predict_single_path_should_forward_progress_events_from_backend() {
 }
 
 #[test]
-fn run_fastsurfer_inference_with_backend_should_merge_start_and_predict_results() {
+fn run_fastsurfer_inference_with_backend_should_merge_start_and_predict_results()
+ {
     let backend = create_backend_state_with_fake_responses(&[
         r#"{"ok":true,"result":{"ack_message":"queued","requested_paths":["/in/a.nii.gz"]}}"#,
         r#"{"ok":true,"result":{"ack_message":"done","requested_paths":["/in/a.nii.gz"],"results":[{"input_path":"/in/a.nii.gz","output_path":"/tmp/out/a.mgz","output_filename":"a.mgz","run_result":"ok"}]}}"#,
@@ -37,8 +39,12 @@ fn run_fastsurfer_inference_with_backend_should_merge_start_and_predict_results(
 
     let file_paths = vec!["/in/a.nii.gz".to_string()];
     let folder_paths: Vec<String> = vec![];
-    let result = run_fastsurfer_inference_with_backend(&backend, &file_paths, &folder_paths)
-        .expect("expected run_fastsurfer_inference_with_backend to succeed");
+    let result = run_fastsurfer_inference_with_backend(
+        &backend,
+        &file_paths,
+        &folder_paths,
+    )
+    .expect("expected run_fastsurfer_inference_with_backend to succeed");
 
     assert_eq!(result.requested_paths, vec!["/in/a.nii.gz".to_string()]);
     assert_eq!(result.results.len(), 1);

@@ -1,7 +1,8 @@
 // This test suite integrates with test-containers for environment isolation.
 use super::support::{
-    create_backend_state_via_shell_script, create_backend_state_with_fake_responses,
-    find_repo_root, fixture_native_input, is_ci, resolve_python_with_component_runtime,
+    create_backend_state_via_shell_script,
+    create_backend_state_with_fake_responses, find_repo_root,
+    fixture_native_input, is_ci, resolve_python_with_component_runtime,
     spawn_python_backend_inline,
 };
 use crate::inference::preprocess::load_input_volume;
@@ -32,7 +33,9 @@ fn run_ipc_request_with_non_json_prelude_should_wait_for_json_response() {
 
     let result = backend
         .run_ipc_request("ping", json!({ "hello": "world" }))
-        .expect("expected ipc request to ignore prelude and parse json response");
+        .expect(
+            "expected ipc request to ignore prelude and parse json response",
+        );
 
     assert_eq!(
         result.get("ack_message"),
@@ -41,14 +44,17 @@ fn run_ipc_request_with_non_json_prelude_should_wait_for_json_response() {
 }
 
 #[test]
-fn run_ipc_request_with_real_python_process_should_pipe_request_and_receive_response() {
+fn run_ipc_request_with_real_python_process_should_pipe_request_and_receive_response()
+ {
     let backend = spawn_python_backend_inline(
         "import json,sys\nfor line in sys.stdin:\n line=line.strip()\n if not line: continue\n req=json.loads(line)\n sys.stdout.write(json.dumps({'ok': True, 'result': {'echo_method': req.get('method')}}) + '\\n')\n sys.stdout.flush()",
     );
 
     let Some(backend) = backend else {
         if is_ci() {
-            eprintln!("python executable unavailable in CI; skipping real python subprocess test");
+            eprintln!(
+                "python executable unavailable in CI; skipping real python subprocess test"
+            );
             return;
         }
         panic!(
@@ -56,9 +62,9 @@ fn run_ipc_request_with_real_python_process_should_pipe_request_and_receive_resp
         );
     };
 
-    let result = backend
-        .run_ipc_request("health", json!({}))
-        .expect("expected run_ipc_request to communicate with real python process");
+    let result = backend.run_ipc_request("health", json!({})).expect(
+        "expected run_ipc_request to communicate with real python process",
+    );
 
     assert_eq!(
         result.get("echo_method"),
@@ -68,8 +74,9 @@ fn run_ipc_request_with_real_python_process_should_pipe_request_and_receive_resp
 
 #[test]
 fn run_ipc_request_with_backend_error_should_return_formatted_error() {
-    let backend =
-        create_backend_state_with_fake_responses(&[r#"{"ok":false,"error":{"message":"boom"}}"#]);
+    let backend = create_backend_state_with_fake_responses(&[
+        r#"{"ok":false,"error":{"message":"boom"}}"#,
+    ]);
 
     let result = backend.run_ipc_request("predict_batch", json!({}));
 
@@ -106,7 +113,8 @@ fn parity_data_loading_should_match_python_load_and_conform_image_component() {
         return;
     }
 
-    let Some(python_bin) = resolve_python_with_component_runtime(&repo_root) else {
+    let Some(python_bin) = resolve_python_with_component_runtime(&repo_root)
+    else {
         eprintln!(
             "python runtime missing required FastSurfer component deps; skipping data loading parity test"
         );
@@ -148,7 +156,10 @@ print(json.dumps({"shape": shape, "zoom": zoom, "samples": samples}))
         .arg("-c")
         .arg(script)
         .arg(&input_nii)
-        .arg(serde_json::to_string(&coords).expect("failed to serialize coordinate list"))
+        .arg(
+            serde_json::to_string(&coords)
+                .expect("failed to serialize coordinate list"),
+        )
         .current_dir(&repo_root)
         .env("PYTHONPATH", repo_root.to_string_lossy().to_string())
         .output()

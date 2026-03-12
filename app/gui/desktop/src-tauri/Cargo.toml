@@ -55,3 +55,5 @@ unused_imports = "deny"
 # Treat clippy warnings as hard errors
 all = "warn"
 pedantic = "warn" # This is the "strict mode"
+too_many_lines = { level = "deny", priority = 1 }
+cognitive_complexity = { level = "deny", priority = 1 }

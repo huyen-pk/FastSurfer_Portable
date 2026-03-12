@@ -1,6 +1,6 @@
-#[deprecated = r#"Switching to native inference mode in Rust, so this Python subprocess management code is no longer used. 
+#[deprecated = r"Switching to native inference mode in Rust, so this Python subprocess management code is no longer used. 
     Keeping it around for now in case we need to reference it for the native implementation, 
-    but it will likely be removed in the future."#]
+    but it will likely be removed in the future."]
 use crate::utils::first_existing_path;
 use std::fs;
 use std::io::BufReader;
@@ -55,9 +55,9 @@ pub fn spawn_backend_process(
         launch_cmd.env("PYTHONPATH", with_repo_on_pythonpath(root));
     }
 
-    let mut child = launch_cmd
-        .spawn()
-        .map_err(|e| format!("Failed to spawn backend process ({}): {e}", launch.program))?;
+    let mut child = launch_cmd.spawn().map_err(|e| {
+        format!("Failed to spawn backend process ({}): {e}", launch.program)
+    })?;
 
     let stdin = child
         .stdin
@@ -77,7 +77,9 @@ pub fn spawn_backend_process(
 
 /// Attempts to infer the repository root by walking up from the python script path.
 /// Looks for the `FastSurferCNN` directory as a marker.
-pub fn resolve_repo_root_from_python_script(script_path: &Path) -> Option<PathBuf> {
+pub fn resolve_repo_root_from_python_script(
+    script_path: &Path,
+) -> Option<PathBuf> {
     script_path
         .ancestors()
         .find(|ancestor| ancestor.join("FastSurferCNN").exists())
@@ -113,8 +115,12 @@ pub fn load_desktop_env(cwd: &Path, exe_dir: &Path) {
         "../../../app/gui/desktop/.env",
     ];
 
-    let env_path = first_existing_path(cwd, &env_suffixes)
-        .or_else(|| first_existing_path(exe_dir, &["../.env", "../../.env", "../../../.env"]));
+    let env_path = first_existing_path(cwd, &env_suffixes).or_else(|| {
+        first_existing_path(
+            exe_dir,
+            &["../.env", "../../.env", "../../../.env"],
+        )
+    });
 
     let Some(path) = env_path else {
         return;
@@ -151,7 +157,10 @@ pub fn load_desktop_env(cwd: &Path, exe_dir: &Path) {
 }
 
 /// Locates the bundled backend binary (e.g. created by PyInstaller).
-pub fn resolve_backend_binary_path_from(cwd: &Path, exe_dir: &Path) -> Result<PathBuf, String> {
+pub fn resolve_backend_binary_path_from(
+    cwd: &Path,
+    exe_dir: &Path,
+) -> Result<PathBuf, String> {
     let cwd_suffixes = [
         "app/gui/desktop/backend/main",
         "gui/desktop/backend/main",
@@ -173,12 +182,16 @@ pub fn resolve_backend_binary_path_from(cwd: &Path, exe_dir: &Path) -> Result<Pa
     first_existing_path(cwd, &cwd_suffixes)
         .or_else(|| first_existing_path(exe_dir, &exe_suffixes))
         .ok_or_else(|| {
-            "Could not find bundled backend binary app/gui/desktop/backend/main".to_string()
+            "Could not find bundled backend binary app/gui/desktop/backend/main"
+                .to_string()
         })
 }
 
 /// Locates the python backend script `ipc_server.py` for development mode.
-pub fn resolve_python_backend_script_path_from(cwd: &Path, exe_dir: &Path) -> Option<PathBuf> {
+pub fn resolve_python_backend_script_path_from(
+    cwd: &Path,
+    exe_dir: &Path,
+) -> Option<PathBuf> {
     let cwd_suffixes = [
         "app/backend/ipc_server.py",
         "../app/backend/ipc_server.py",
@@ -197,7 +210,8 @@ pub fn resolve_python_backend_script_path_from(cwd: &Path, exe_dir: &Path) -> Op
         "../../../../app/backend/ipc_server.py",
     ];
 
-    first_existing_path(cwd, &cwd_suffixes).or_else(|| first_existing_path(exe_dir, &exe_suffixes))
+    first_existing_path(cwd, &cwd_suffixes)
+        .or_else(|| first_existing_path(exe_dir, &exe_suffixes))
 }
 
 /// Finds a valid python executable, checking environment overrides first.

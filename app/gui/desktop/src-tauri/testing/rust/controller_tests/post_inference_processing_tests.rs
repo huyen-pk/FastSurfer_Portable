@@ -1,10 +1,11 @@
 // This test suite integrates with test-containers for environment isolation.
 use super::support::{
-    create_backend_state_with_fake_responses, find_repo_root, fixture_python_pred, next_test_id,
-    resolve_python_with_component_runtime,
+    create_backend_state_with_fake_responses, find_repo_root,
+    fixture_python_pred, next_test_id, resolve_python_with_component_runtime,
 };
 use crate::inference::postprocess::{
-    derive_aseg_from_pred, derive_brainmask_from_pred, flip_wm_islands, mask_aseg_with_brainmask,
+    derive_aseg_from_pred, derive_brainmask_from_pred, flip_wm_islands,
+    mask_aseg_with_brainmask,
 };
 use crate::inference::preprocess::load_input_volume;
 use std::fs;
@@ -12,7 +13,8 @@ use std::io::Write;
 use std::process::Command;
 
 #[test]
-fn predict_batch_with_result_entries_should_return_ack_and_deduplicated_directories() {
+fn predict_batch_with_result_entries_should_return_ack_and_deduplicated_directories()
+ {
     let backend = create_backend_state_with_fake_responses(&[
         r#"{"ok":true,"result":{"ack_message":"done","requested_paths":["x"],"results":[{"input_path":"/in/a.nii.gz","output_path":"/tmp/out/a.mgz","output_filename":"a.mgz","run_result":"ok"},{"input_path":"/in/b.nii.gz","output_path":"/tmp/out/b.mgz","output_filename":"b.mgz","run_result":1}]}}"#,
     ]);
@@ -42,7 +44,8 @@ fn predict_batch_without_requested_paths_should_use_fallback_requested_paths() {
 }
 
 #[test]
-fn parity_postprocessing_should_match_original_python_components_on_python_pred_fixture() {
+fn parity_postprocessing_should_match_original_python_components_on_python_pred_fixture()
+ {
     let Some(repo_root) = find_repo_root() else {
         panic!("failed to locate repo root for postprocessing parity test");
     };
@@ -56,7 +59,8 @@ fn parity_postprocessing_should_match_original_python_components_on_python_pred_
         return;
     }
 
-    let Some(python_bin) = resolve_python_with_component_runtime(&repo_root) else {
+    let Some(python_bin) = resolve_python_with_component_runtime(&repo_root)
+    else {
         eprintln!(
             "python runtime missing required FastSurfer component deps; skipping postprocessing parity test"
         );
@@ -78,13 +82,15 @@ fn parity_postprocessing_should_match_original_python_components_on_python_pred_
     mask_aseg_with_brainmask(&mut rust_aseg, &rust_brainmask);
     flip_wm_islands(&mut rust_aseg, shape);
 
-    let run_dir =
-        std::env::temp_dir().join(format!("postprocess_component_parity_{}", next_test_id()));
-    fs::create_dir_all(&run_dir).expect("failed to create temp postprocessing parity directory");
+    let run_dir = std::env::temp_dir()
+        .join(format!("postprocess_component_parity_{}", next_test_id()));
+    fs::create_dir_all(&run_dir)
+        .expect("failed to create temp postprocessing parity directory");
 
     let rust_aseg_raw = run_dir.join("rust_aseg.raw");
-    let mut aseg_file = fs::File::create(&rust_aseg_raw)
-        .expect("failed to create rust aseg raw file for postprocessing parity");
+    let mut aseg_file = fs::File::create(&rust_aseg_raw).expect(
+        "failed to create rust aseg raw file for postprocessing parity",
+    );
     for value in &rust_aseg {
         aseg_file
             .write_all(&value.to_le_bytes())
@@ -92,7 +98,8 @@ fn parity_postprocessing_should_match_original_python_components_on_python_pred_
     }
 
     let rust_mask_raw = run_dir.join("rust_brainmask.raw");
-    fs::write(&rust_mask_raw, &rust_brainmask).expect("failed writing rust brainmask raw file");
+    fs::write(&rust_mask_raw, &rust_brainmask)
+        .expect("failed writing rust brainmask raw file");
 
     let script = r#"
 import numpy as np

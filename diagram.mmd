@@ -1,0 +1,73 @@
+%%{init: {'theme': 'default'}}%%
+graph TD
+  RNSP[run_native_single_path] --> LIV[load_input_volume]
+  RNSP --> NSIP[native_slice_indices_for_plane]
+  RNSP --> SCD[session_channels_or_default]
+  RNSP --> PNSP[parse_native_slices_per_plane]
+  RNSP --> RFAM[run_forward_and_merge]
+  RNSP --> FLTL[finalize_logits_to_labels]
+  RNSP --> FNR[finalize_native_result]
+
+  RFAM --> BSL[build_sampled_lookup]
+  RFAM --> EFP[execute_forward_pass]
+
+  EFP --> NPE[native_parallel_enabled]
+  EFP --> EP_PAR[execute_forward_pass_parallel]
+  EFP --> EP_SEQ[execute_forward_pass_sequential]
+
+  EP_PAR --> RSFP[run_single_plane_forward_at_slice]
+  EP_PAR --> RIF[remap_if_sagittal]
+  EP_PAR --> HPR[handle_plane_result]
+
+  EP_SEQ --> RSFP
+  EP_SEQ --> RIF
+  EP_SEQ --> HPR
+
+  HPR --> MVI[merge_plane_logits_into_volume]
+  HPR --> MSV[merge_plane_logits_into_sparse_volume]
+
+  RSFP --> SCD
+  RSFP --> PPI[prepare_plane_input_for_slice]:::ext
+  RSFP --> PSR[PlaneSessionRef.run]:::ext
+
+  RIF --> RSL[remap_sagittal_logits_to_full_space]
+  RSL --> SIM[sagittal_index_map_for_classes]
+
+  MVI --> OXYZ[oriented_to_xyz]:::ext
+  MVI --> TVS[transformed_volume_shape]:::ext
+  MSV --> OXYZ
+  MSV --> TVS
+
+  FLTL --> ARG[argmax_labels_from_logits]
+
+  FNR --> MLT[map_label_indices_to_lut]
+  FNR --> SPL[split_cortex_labels]:::ext
+  FNR --> WPA[write_prediction_artifacts]
+  FNR --> QC[evaluate_qc]:::ext
+  FNR --> SESS[NativeOnnxSessions.run_dummy_probe]:::ext
+
+  WPA --> CNO[create_native_output_dir]
+  WPA --> WPN[write_pred_nifti]
+  WPA --> ASE[derive_aseg_from_pred]:::ext
+  WPA --> BMR[derive_brainmask_from_pred]:::ext
+  WPA --> MAS[mask_aseg_with_brainmask]:::ext
+  WPA --> FWI[flip_wm_islands]:::ext
+  WPA --> WU8[write_u8_nifti]
+
+  PSIN[process_single_input] --> ISC[is_task_cancelled]
+  PSIN --> EIP[emit_inference_progress]
+  PSIN --> RNSP
+
+  RNI[run_native_inference] --> VAL[validate_inputs]
+  RNI --> NLD[NativeOnnxSessions::load_default]:::ctor
+  RNI --> LL[load_lut_ids]
+  RNI --> RNSP
+
+  RNIWP[run_native_inference_with_progress] --> VAL
+  RNIWP --> EIP
+  RNIWP --> NLD
+  RNIWP --> LL
+  RNIWP --> PSIN
+
+  classDef ext fill:#f9f,stroke:#333,stroke-width:1px
+  classDef ctor fill:#9f9,stroke:#333,stroke-width:1px

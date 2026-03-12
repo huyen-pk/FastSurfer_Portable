@@ -183,7 +183,8 @@ fn progress_events_should_be_monotonically_increasing_in_typical_workflow() {
         .expect("expected predict_single_path to succeed");
 
     assert_eq!(captured.len(), 5);
-    let progress_values: Vec<usize> = captured.iter().map(|(p, _)| *p).collect();
+    let progress_values: Vec<usize> =
+        captured.iter().map(|(p, _)| *p).collect();
     assert_eq!(progress_values, vec![5, 20, 50, 85, 100]);
 
     for i in 1..progress_values.len() {

@@ -1,18 +1,22 @@
 // This test suite integrates with test-containers for environment isolation.
 use super::support::{
-    convert_mgz_to_nii_gz, create_backend_state_via_process, find_repo_root, fixture_native_input,
-    fixture_python_pred, python_has_fastsurfer_runtime, python_has_nibabel_runtime,
-    resolve_python_with_component_runtime, run_native_inference_with_timeout,
+    convert_mgz_to_nii_gz, create_backend_state_via_process, find_repo_root,
+    fixture_native_input, fixture_python_pred, python_has_fastsurfer_runtime,
+    python_has_nibabel_runtime, resolve_python_with_component_runtime,
+    run_native_inference_with_timeout,
 };
 use crate::inference::postprocess::{
-    derive_aseg_from_pred, derive_brainmask_from_pred, flip_wm_islands, mask_aseg_with_brainmask,
+    derive_aseg_from_pred, derive_brainmask_from_pred, flip_wm_islands,
+    mask_aseg_with_brainmask,
 };
 use crate::inference::preprocess::{
-    InferencePlane, InputVolume, load_input_volume, prepare_plane_input_for_slice,
-    transformed_volume_shape,
+    InferencePlane, InputVolume, load_input_volume,
+    prepare_plane_input_for_slice, transformed_volume_shape,
 };
 use crate::prediction::run_fastsurfer_inference_with_backend;
-use crate::process_mgmt::{load_desktop_env, resolve_backend_launch_command_from};
+use crate::process_mgmt::{
+    load_desktop_env, resolve_backend_launch_command_from,
+};
 use ndarray::Array3;
 use nifti::writer::WriterOptions;
 use serde::Serialize;
@@ -212,8 +216,13 @@ fn write_f32_nifti(
         ));
     }
 
-    let array = Array3::from_shape_vec((shape_xyz[0], shape_xyz[1], shape_xyz[2]), data)
-        .map_err(|error| format!("failed to shape preprocess volume for nifti write: {error}"))?;
+    let array = Array3::from_shape_vec(
+        (shape_xyz[0], shape_xyz[1], shape_xyz[2]),
+        data,
+    )
+    .map_err(|error| {
+        format!("failed to shape preprocess volume for nifti write: {error}")
+    })?;
 
     WriterOptions::new(output_path)
         .reference_header(&volume.header)
@@ -239,28 +248,44 @@ fn preprocess_stage_rust_full_volume(
         InferencePlane::Axial,
         InferencePlane::Sagittal,
     ] {
-        let [h, w, slices] = transformed_volume_shape(volume.shape_xyz, plane);
-        let mut center_channel_volume = vec![0f32; h * w * slices];
+        let [height, width, slices_count] =
+            transformed_volume_shape(volume.shape_xyz, plane);
+        let mut center_channel_volume =
+            vec![0f32; height * width * slices_count];
 
-        for slice_index in 0..slices {
-            let prepared = prepare_plane_input_for_slice(&volume, plane, 7, 1.0, slice_index)?;
+        for slice_index in 0..slices_count {
+            let prepared = prepare_plane_input_for_slice(
+                &volume,
+                plane,
+                7,
+                1.0,
+                slice_index,
+            )?;
             stats.update_slice(&prepared.tensor_data);
 
             let channels = prepared.tensor_shape[1];
             let center_channel = channels / 2;
-            let hw = h * w;
+            let hw = height * width;
             let base = center_channel * hw;
-            for ih in 0..h {
-                for iw in 0..w {
-                    let plane_offset = ((ih * w) + iw) * slices + slice_index;
-                    let slice_offset = base + (ih * w) + iw;
-                    center_channel_volume[plane_offset] = prepared.tensor_data[slice_offset];
+            for row in 0..height {
+                for col in 0..width {
+                    let plane_offset =
+                        ((row * width) + col) * slices_count + slice_index;
+                    let slice_offset = base + (row * width) + col;
+                    center_channel_volume[plane_offset] =
+                        prepared.tensor_data[slice_offset];
                 }
             }
         }
 
-        let output_path = preprocess_dir.join(format!("rust_preprocess_{}.nii.gz", plane.as_str()));
-        write_f32_nifti(&volume, [h, w, slices], center_channel_volume, &output_path)?;
+        let output_path = preprocess_dir
+            .join(format!("rust_preprocess_{}.nii.gz", plane.as_str()));
+        write_f32_nifti(
+            &volume,
+            [height, width, slices_count],
+            center_channel_volume,
+            &output_path,
+        )?;
     }
 
     Ok((t0.elapsed().as_secs_f64() * 1000.0, stats.as_json()))
@@ -358,18 +383,22 @@ print(json.dumps({
             preprocess_dir.to_string_lossy().to_string(),
         ],
     )?;
-    let elapsed = parsed["elapsed_ms"]
-        .as_f64()
-        .ok_or_else(|| "python preprocess helper missing elapsed_ms".to_string())?;
+    let elapsed = parsed["elapsed_ms"].as_f64().ok_or_else(|| {
+        "python preprocess helper missing elapsed_ms".to_string()
+    })?;
     Ok((elapsed, parsed["stats"].clone()))
 }
 
-fn inference_stage_python(repo_root: &Path, input_path: &Path) -> Result<(f64, PathBuf), String> {
+fn inference_stage_python(
+    repo_root: &Path,
+    input_path: &Path,
+) -> Result<(f64, PathBuf), String> {
     let cwd = repo_root.join("app/gui/desktop/src-tauri");
     let exe_dir = cwd.join("target/debug");
     load_desktop_env(&cwd, &exe_dir);
-    let launch = resolve_backend_launch_command_from(&cwd, &exe_dir)
-        .map_err(|error| format!("failed to resolve backend launch command: {error}"))?;
+    let launch = resolve_backend_launch_command_from(&cwd, &exe_dir).map_err(
+        |error| format!("failed to resolve backend launch command: {error}"),
+    )?;
 
     let mut launch_cmd = Command::new(&launch.program);
     launch_cmd
@@ -418,9 +447,11 @@ fn ensure_python_golden_fixture(
         "app/gui/desktop/src-tauri/testing/data/fs_reference/Subject140/forward pass/python_forward_pred.nii.gz",
     );
     if fs_reference_pred.exists() {
-        let fs_volume =
-            load_input_volume(&fs_reference_pred.to_string_lossy()).map_err(|error| {
-                format!("failed loading fs_reference python golden fixture: {error}")
+        let fs_volume = load_input_volume(&fs_reference_pred.to_string_lossy())
+            .map_err(|error| {
+                format!(
+                    "failed loading fs_reference python golden fixture: {error}"
+                )
             })?;
         let native_volume =
             load_input_volume(&native_input_nii.to_string_lossy()).map_err(|error| {
@@ -436,11 +467,19 @@ fn ensure_python_golden_fixture(
 
     if fixture_pred.exists() {
         let fixture_volume = load_input_volume(&fixture_pred.to_string_lossy())
-            .map_err(|error| format!("failed loading existing python golden fixture: {error}"))?;
-        let native_volume =
-            load_input_volume(&native_input_nii.to_string_lossy()).map_err(|error| {
-                format!("failed loading native input for fixture validation: {error}")
+            .map_err(|error| {
+                format!(
+                    "failed loading existing python golden fixture: {error}"
+                )
             })?;
+        let native_volume = load_input_volume(
+            &native_input_nii.to_string_lossy(),
+        )
+        .map_err(|error| {
+            format!(
+                "failed loading native input for fixture validation: {error}"
+            )
+        })?;
 
         if fixture_volume.shape_xyz == native_volume.shape_xyz {
             return Ok(fixture_pred);
@@ -448,11 +487,13 @@ fn ensure_python_golden_fixture(
     }
 
     if let Some(parent) = fixture_pred.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|error| format!("failed creating python golden fixture directory: {error}"))?;
+        fs::create_dir_all(parent).map_err(|error| {
+            format!("failed creating python golden fixture directory: {error}")
+        })?;
     }
 
-    let (_elapsed_ms, generated_pred) = inference_stage_python(repo_root, native_input_nii)?;
+    let (_elapsed_ms, generated_pred) =
+        inference_stage_python(repo_root, native_input_nii)?;
     fs::copy(&generated_pred, &fixture_pred).map_err(|error| {
         format!(
             "failed copying generated python prediction '{}' to golden fixture '{}': {error}",
@@ -559,9 +600,9 @@ print(json.dumps({
         ],
     )?;
 
-    let elapsed = parsed["elapsed_ms"]
-        .as_f64()
-        .ok_or_else(|| "python postprocess helper missing elapsed_ms".to_string())?;
+    let elapsed = parsed["elapsed_ms"].as_f64().ok_or_else(|| {
+        "python postprocess helper missing elapsed_ms".to_string()
+    })?;
     Ok((elapsed, parsed["accuracy"].clone()))
 }
 
@@ -616,13 +657,17 @@ fn parity_run_python_benchmark() -> bool {
 
 #[test]
 #[ignore = "Heavy full-volume parity benchmark for pipeline stages and metrics"]
-fn parity_dice_assd_hd95_hdmax_icc_full_volume_pipeline_should_generate_stage_benchmark_report() {
+fn parity_dice_assd_hd95_hdmax_icc_full_volume_pipeline_should_generate_stage_benchmark_report()
+ {
     let Some(repo_root) = find_repo_root() else {
         panic!("failed to locate repo root for full-volume parity benchmark");
     };
 
-    let Some(python_bin) = resolve_python_with_component_runtime(&repo_root) else {
-        eprintln!("python runtime missing component deps; skipping full-volume parity benchmark");
+    let Some(python_bin) = resolve_python_with_component_runtime(&repo_root)
+    else {
+        eprintln!(
+            "python runtime missing component deps; skipping full-volume parity benchmark"
+        );
         return;
     };
 
@@ -635,8 +680,8 @@ fn parity_dice_assd_hd95_hdmax_icc_full_volume_pipeline_should_generate_stage_be
         return;
     }
 
-    let input_mgz =
-        repo_root.join("app/gui/desktop/src-tauri/testing/data/Subject140/140_orig.mgz");
+    let input_mgz = repo_root
+        .join("app/gui/desktop/src-tauri/testing/data/Subject140/140_orig.mgz");
     if !input_mgz.exists() {
         eprintln!(
             "missing Subject140 input at '{}'; skipping",
@@ -648,50 +693,62 @@ fn parity_dice_assd_hd95_hdmax_icc_full_volume_pipeline_should_generate_stage_be
     let fixture_native = fixture_native_input(&repo_root);
     if !fixture_native.exists() {
         if let Some(parent) = fixture_native.parent() {
-            fs::create_dir_all(parent).expect("failed to create native fixture parent directory");
+            fs::create_dir_all(parent)
+                .expect("failed to create native fixture parent directory");
         }
         convert_mgz_to_nii_gz(&python_bin, &input_mgz, &fixture_native)
             .expect("failed to convert mgz to native input nii for benchmark");
     }
 
-    let reports_root = repo_root.join("app/gui/desktop/src-tauri/testing/rust/results");
-    fs::create_dir_all(&reports_root).expect("failed to create parity reports root directory");
+    let reports_root =
+        repo_root.join("app/gui/desktop/src-tauri/testing/rust/results");
+    fs::create_dir_all(&reports_root)
+        .expect("failed to create parity reports root directory");
 
     let run_dir = reports_root.join(format!(
         "parity_dice_assd_hd95_hdmax_icc_full_volume_subject140_{}",
         now_unix_millis()
     ));
-    fs::create_dir_all(&run_dir).expect("failed to create parity run directory");
+    fs::create_dir_all(&run_dir)
+        .expect("failed to create parity run directory");
 
     let preprocess_dir = run_dir.join("preprocess");
     let forward_dir = run_dir.join("forward_pass");
     let postprocess_dir = run_dir.join("postprocess");
-    fs::create_dir_all(&preprocess_dir).expect("failed to create preprocess artifacts directory");
-    fs::create_dir_all(&forward_dir).expect("failed to create forward artifacts directory");
-    fs::create_dir_all(&postprocess_dir).expect("failed to create postprocess artifacts directory");
+    fs::create_dir_all(&preprocess_dir)
+        .expect("failed to create preprocess artifacts directory");
+    fs::create_dir_all(&forward_dir)
+        .expect("failed to create forward artifacts directory");
+    fs::create_dir_all(&postprocess_dir)
+        .expect("failed to create postprocess artifacts directory");
 
     let input_mgz_copy = run_dir.join("input_subject140.mgz");
-    let input_native_copy = run_dir.join("input_subject140.native_input.nii.gz");
-    copy_if_exists(&input_mgz, &input_mgz_copy).expect("failed copying input mgz artifact");
+    let input_native_copy =
+        run_dir.join("input_subject140.native_input.nii.gz");
+    copy_if_exists(&input_mgz, &input_mgz_copy)
+        .expect("failed copying input mgz artifact");
     copy_if_exists(&fixture_native, &input_native_copy)
         .expect("failed copying input native nii artifact");
 
     let (rust_pre_ms, rust_pre_stats) =
         preprocess_stage_rust_full_volume(&fixture_native, &preprocess_dir)
             .expect("rust preprocess stage failed");
-    let (python_pre_ms, python_pre_stats) = preprocess_stage_python_full_volume(
-        &python_bin,
-        &repo_root,
-        &fixture_native,
-        &preprocess_dir,
-    )
-    .expect("python preprocess stage failed");
+    let (python_pre_ms, python_pre_stats) =
+        preprocess_stage_python_full_volume(
+            &python_bin,
+            &repo_root,
+            &fixture_native,
+            &preprocess_dir,
+        )
+        .expect("python preprocess stage failed");
 
     let _slices_per_plane = parity_slices_per_plane();
 
     // Environment must be set externally for this test.
     if std::env::var("FASTSURFER_REPO_ROOT").is_err() {
-        eprintln!("Skipping full-volume parity benchmark: FASTSURFER_REPO_ROOT not set");
+        eprintln!(
+            "Skipping full-volume parity benchmark: FASTSURFER_REPO_ROOT not set"
+        );
         return;
     }
 
@@ -715,8 +772,9 @@ fn parity_dice_assd_hd95_hdmax_icc_full_volume_pipeline_should_generate_stage_be
         rust_pred.display()
     );
 
-    let python_golden_pred = ensure_python_golden_fixture(&repo_root, &fixture_native)
-        .expect("failed to ensure python golden prediction fixture");
+    let python_golden_pred =
+        ensure_python_golden_fixture(&repo_root, &fixture_native)
+            .expect("failed to ensure python golden prediction fixture");
 
     let run_python_benchmark = parity_run_python_benchmark();
     let (python_inf_ms, python_pred_benchmark) = if run_python_benchmark {
@@ -726,8 +784,8 @@ fn parity_dice_assd_hd95_hdmax_icc_full_volume_pipeline_should_generate_stage_be
         (0.0, python_golden_pred.clone())
     };
 
-    let metrics_script =
-        repo_root.join("app/gui/desktop/src-tauri/testing/python/parity_metrics.py");
+    let metrics_script = repo_root
+        .join("app/gui/desktop/src-tauri/testing/python/parity_metrics.py");
     let inference_metrics_json = forward_dir.join("inference_metrics.json");
     let status = Command::new(&python_bin)
         .arg(&metrics_script)
@@ -750,15 +808,20 @@ fn parity_dice_assd_hd95_hdmax_icc_full_volume_pipeline_should_generate_stage_be
     .expect("failed parsing inference metrics json");
 
     let dice_fg =
-        read_nested_f64(&inference_metrics, &["aggregate", "dice_foreground"]).unwrap_or(0.0);
+        read_nested_f64(&inference_metrics, &["aggregate", "dice_foreground"])
+            .unwrap_or(0.0);
     let dice_macro =
-        read_nested_f64(&inference_metrics, &["aggregate", "dice_macro"]).unwrap_or(0.0);
+        read_nested_f64(&inference_metrics, &["aggregate", "dice_macro"])
+            .unwrap_or(0.0);
     let icc_2_1 =
-        read_nested_f64(&inference_metrics, &["aggregate", "icc_2_1_volumes"]).unwrap_or(0.0);
-    let assd_fg = read_nested_f64(&inference_metrics, &["aggregate", "assd_foreground"])
-        .unwrap_or(f64::INFINITY);
-    let hd95_fg = read_nested_f64(&inference_metrics, &["aggregate", "hd95_foreground"])
-        .unwrap_or(f64::INFINITY);
+        read_nested_f64(&inference_metrics, &["aggregate", "icc_2_1_volumes"])
+            .unwrap_or(0.0);
+    let assd_fg =
+        read_nested_f64(&inference_metrics, &["aggregate", "assd_foreground"])
+            .unwrap_or(f64::INFINITY);
+    let hd95_fg =
+        read_nested_f64(&inference_metrics, &["aggregate", "hd95_foreground"])
+            .unwrap_or(f64::INFINITY);
 
     assert!(
         dice_fg >= MIN_DICE_FOREGROUND,
@@ -810,8 +873,8 @@ fn parity_dice_assd_hd95_hdmax_icc_full_volume_pipeline_should_generate_stage_be
     let rust_post_ms = post_t0.elapsed().as_secs_f64() * 1000.0;
 
     let rust_aseg_raw = postprocess_dir.join("rust_post_aseg.raw");
-    let mut aseg_file =
-        fs::File::create(&rust_aseg_raw).expect("failed to create rust_post_aseg.raw");
+    let mut aseg_file = fs::File::create(&rust_aseg_raw)
+        .expect("failed to create rust_post_aseg.raw");
     for value in &rust_aseg {
         aseg_file
             .write_all(&value.to_le_bytes())
@@ -822,7 +885,8 @@ fn parity_dice_assd_hd95_hdmax_icc_full_volume_pipeline_should_generate_stage_be
         .expect("failed writing rust_post_brainmask.raw");
 
     let python_aseg_nii = postprocess_dir.join("python_post_aseg.nii.gz");
-    let python_brainmask_nii = postprocess_dir.join("python_post_brainmask.nii.gz");
+    let python_brainmask_nii =
+        postprocess_dir.join("python_post_brainmask.nii.gz");
     let rust_aseg_nii = postprocess_dir.join("rust_post_aseg.nii.gz");
     let rust_brainmask_nii = postprocess_dir.join("rust_post_brainmask.nii.gz");
 
@@ -875,7 +939,8 @@ fn parity_dice_assd_hd95_hdmax_icc_full_volume_pipeline_should_generate_stage_be
         "python_forward_benchmark_",
         "python_forward_benchmark_pred.nii.gz",
     ));
-    copy_if_exists(&rust_pred, &rust_pred_copy).expect("failed copying rust pred artifact");
+    copy_if_exists(&rust_pred, &rust_pred_copy)
+        .expect("failed copying rust pred artifact");
     copy_if_exists(&python_golden_pred, &python_golden_pred_copy)
         .expect("failed copying python golden pred artifact");
     copy_if_exists(&python_pred_benchmark, &python_benchmark_pred_copy)

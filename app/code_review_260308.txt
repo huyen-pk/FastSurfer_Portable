@@ -5,6 +5,8 @@ Global:
 - audit agents: Adversarial Testing
 - precommit hook for assertion density verification
 
+Benchmarking:
+- AUROC metrics to compare rust-legacy output
 
 
 Svelte:
@@ -27,7 +29,12 @@ files conversion, parity tests):
 - pipeline.rs
 => resolve_native_onnx_runtime() use environment variable which requires setting it up when start application, this won't work 
 when bundle up application for user to install.
+=> run_forward_and_merge(): change name to run_forward_and_aggregate()
+=> run_single_plane_forward_at_slice(): this need to be updated to reflect the batch inference in legacy (set batch=1 for single slice inference)
 => legacy_preprocessing_summary()
 
+- preprocessing.rs
+=> processes use NifTi format, conversion is done by loading Python binary (nibabel) in run_python_nibabel_convert()
+need to see whether the conversion is needed (use mgh crate) then handle the conversion natively in rust
 
 - use named variables in string interpolations when there more than 3 arguments

@@ -10,7 +10,10 @@ use std::io::{BufRead, Write};
 ///
 /// # Returns
 /// `Ok(())` on success, or an error description.
-pub fn write_ipc_request(process: &mut BackendProcess, request: &Value) -> Result<(), String> {
+pub fn write_ipc_request(
+    process: &mut BackendProcess,
+    request: &Value,
+) -> Result<(), String> {
     let method = request
         .get("method")
         .and_then(Value::as_str)
@@ -21,7 +24,9 @@ pub fn write_ipc_request(process: &mut BackendProcess, request: &Value) -> Resul
     process
         .stdin
         .write_all(request_line.as_bytes())
-        .map_err(|e| format!("Failed to write request to backend process: {e}"))?;
+        .map_err(|e| {
+            format!("Failed to write request to backend process: {e}")
+        })?;
     process
         .stdin
         .flush()
@@ -52,7 +57,9 @@ pub fn read_ipc_response(
             .map_err(|e| format!("Failed to read backend response: {e}"))?;
 
         if read_bytes == 0 {
-            return Err("Backend process exited before sending a response".to_string());
+            return Err(
+                "Backend process exited before sending a response".to_string()
+            );
         }
 
         let trimmed = response_line.trim();

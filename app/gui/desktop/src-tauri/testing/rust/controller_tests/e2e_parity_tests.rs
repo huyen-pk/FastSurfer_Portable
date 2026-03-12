@@ -1,15 +1,20 @@
 // This test suite integrates with test-containers for environment isolation.
 use super::support::{
-    compare_label_volumes_per_plane_single_slice_in_rust, compare_label_volumes_with_python,
-    compare_preprocess_slice_with_python, configured_slice_indices, convert_mgz_to_nii_gz,
-    create_backend_state_via_process, ensure_native_input_nifti, find_repo_root, is_ci,
-    python_has_fastsurfer_runtime, python_has_nibabel_runtime, resolve_python_with_nibabel,
+    compare_label_volumes_per_plane_single_slice_in_rust,
+    compare_label_volumes_with_python, compare_preprocess_slice_with_python,
+    configured_slice_indices, convert_mgz_to_nii_gz,
+    create_backend_state_via_process, ensure_native_input_nifti,
+    find_repo_root, is_ci, python_has_fastsurfer_runtime,
+    python_has_nibabel_runtime, resolve_python_with_nibabel,
     run_native_inference_with_timeout,
 };
-use crate::inference::preprocess::{InferencePlane, load_input_volume, transformed_volume_shape};
+use crate::inference::preprocess::{
+    InferencePlane, load_input_volume, transformed_volume_shape,
+};
 use crate::prediction::run_fastsurfer_inference_with_backend;
 use crate::process_mgmt::{
-    load_desktop_env, resolve_backend_launch_command_from, resolve_python_executable,
+    load_desktop_env, resolve_backend_launch_command_from,
+    resolve_python_executable,
 };
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -23,7 +28,10 @@ fn test_run_timestamp() -> u128 {
         .unwrap_or(0)
 }
 
-fn create_timestamped_results_dir(repo_root: &Path, prefix: &str) -> Result<PathBuf, String> {
+fn create_timestamped_results_dir(
+    repo_root: &Path,
+    prefix: &str,
+) -> Result<PathBuf, String> {
     let root = repo_root.join("app/gui/desktop/src-tauri/testing/rust/results");
     fs::create_dir_all(&root).map_err(|error| {
         format!(
@@ -62,7 +70,8 @@ fn run_fastsurfer_inference_with_test_data_should_produce_output_file() {
         .stderr(Stdio::inherit());
 
     if !launch.args.is_empty() {
-        let python_bin = resolve_python_executable().expect("python executable not found");
+        let python_bin =
+            resolve_python_executable().expect("python executable not found");
         if !python_has_fastsurfer_runtime(&python_bin, &repo_root) {
             if is_ci() {
                 eprintln!(
@@ -82,8 +91,8 @@ fn run_fastsurfer_inference_with_test_data_should_produce_output_file() {
     let child = launch_cmd.spawn().expect("failed to spawn backend process");
 
     let backend = create_backend_state_via_process(child);
-    let input_path =
-        repo_root.join("app/gui/desktop/src-tauri/testing/data/Subject140/140_orig.mgz");
+    let input_path = repo_root
+        .join("app/gui/desktop/src-tauri/testing/data/Subject140/140_orig.mgz");
     assert!(
         input_path.exists(),
         "test input file not found: {}",
@@ -92,8 +101,12 @@ fn run_fastsurfer_inference_with_test_data_should_produce_output_file() {
 
     let file_paths = vec![input_path.to_string_lossy().to_string()];
     let folder_paths: Vec<String> = vec![];
-    let result = run_fastsurfer_inference_with_backend(&backend, &file_paths, &folder_paths)
-        .expect("expected e2e inference call to succeed");
+    let result = run_fastsurfer_inference_with_backend(
+        &backend,
+        &file_paths,
+        &folder_paths,
+    )
+    .expect("expected e2e inference call to succeed");
 
     assert!(!result.results.is_empty());
     let output_path = PathBuf::from(&result.results[0].output_path);
@@ -125,7 +138,8 @@ fn predict_single_path_with_test_data_should_emit_progress_events() {
         .stderr(Stdio::inherit());
 
     if !launch.args.is_empty() {
-        let python_bin = resolve_python_executable().expect("python executable not found");
+        let python_bin =
+            resolve_python_executable().expect("python executable not found");
         if !python_has_fastsurfer_runtime(&python_bin, &repo_root) {
             if is_ci() {
                 eprintln!(
@@ -145,8 +159,8 @@ fn predict_single_path_with_test_data_should_emit_progress_events() {
     let child = launch_cmd.spawn().expect("failed to spawn backend process");
 
     let backend = create_backend_state_via_process(child);
-    let input_path =
-        repo_root.join("app/gui/desktop/src-tauri/testing/data/Subject140/140_orig.mgz");
+    let input_path = repo_root
+        .join("app/gui/desktop/src-tauri/testing/data/Subject140/140_orig.mgz");
     assert!(
         input_path.exists(),
         "test input file not found: {}",
@@ -183,12 +197,14 @@ fn predict_single_path_with_test_data_should_emit_progress_events() {
 
 #[test]
 #[ignore = "Runs real Python+Rust inference parity check on Subject140 test data"]
-fn parity_native_rust_inference_with_test_data_should_generate_output_and_compare_to_python() {
+fn parity_native_rust_inference_with_test_data_should_generate_output_and_compare_to_python()
+ {
     let Some(repo_root) = find_repo_root() else {
         panic!("failed to locate repo root for native e2e parity test");
     };
 
-    let python_bin = resolve_python_executable().expect("python executable not found");
+    let python_bin =
+        resolve_python_executable().expect("python executable not found");
     if !python_has_fastsurfer_runtime(&python_bin, &repo_root)
         || !python_has_nibabel_runtime(&python_bin, &repo_root)
     {
@@ -199,15 +215,16 @@ fn parity_native_rust_inference_with_test_data_should_generate_output_and_compar
         return;
     }
 
-    let input_mgz =
-        repo_root.join("app/gui/desktop/src-tauri/testing/data/Subject140/140_orig.mgz");
+    let input_mgz = repo_root
+        .join("app/gui/desktop/src-tauri/testing/data/Subject140/140_orig.mgz");
     assert!(
         input_mgz.exists(),
         "test input file not found: {}",
         input_mgz.display()
     );
 
-    let fixture_dir = repo_root.join("app/gui/desktop/src-tauri/testing/data/.tmp_e2e_output_py");
+    let fixture_dir = repo_root
+        .join("app/gui/desktop/src-tauri/testing/data/.tmp_e2e_output_py");
     fs::create_dir_all(&fixture_dir)
         .expect("failed to create temporary e2e fixture output directory");
     let input_nii = fixture_dir.join("140_orig.native_input.nii.gz");
@@ -221,7 +238,9 @@ fn parity_native_rust_inference_with_test_data_should_generate_output_and_compar
 
     // Environment must be set externally for this test.
     if std::env::var("FASTSURFER_REPO_ROOT").is_err() {
-        eprintln!("Skipping native e2e parity test: FASTSURFER_REPO_ROOT not set");
+        eprintln!(
+            "Skipping native e2e parity test: FASTSURFER_REPO_ROOT not set"
+        );
         return;
     }
     let native_result = run_native_inference_with_timeout(
@@ -292,7 +311,8 @@ fn parity_label_volume_ratio_rust_inference_with_golden_files_should_compare_wit
         panic!("failed to locate repo root for native golden parity test");
     };
 
-    let fixture_dir = repo_root.join("app/gui/desktop/src-tauri/testing/data/.tmp_e2e_output_py");
+    let fixture_dir = repo_root
+        .join("app/gui/desktop/src-tauri/testing/data/.tmp_e2e_output_py");
     let input_nii = fixture_dir.join("140_orig.native_input.nii.gz");
     let golden_pred = fixture_dir.join("140_orig.python_pred.nii.gz");
 
@@ -307,18 +327,24 @@ fn parity_label_volume_ratio_rust_inference_with_golden_files_should_compare_wit
 
     // Environment must be set externally for this test.
     if std::env::var("FASTSURFER_REPO_ROOT").is_err() {
-        eprintln!("Skipping rust-only golden parity test: FASTSURFER_REPO_ROOT not set");
+        eprintln!(
+            "Skipping rust-only golden parity test: FASTSURFER_REPO_ROOT not set"
+        );
         return;
     }
 
-    let outer_timeout_secs = std::env::var("FASTSURFER_NATIVE_TEST_TIMEOUT_SECS")
-        .ok()
-        .and_then(|value| value.trim().parse::<u64>().ok())
-        .filter(|value| *value > 0)
-        .unwrap_or(60);
+    let outer_timeout_secs =
+        std::env::var("FASTSURFER_NATIVE_TEST_TIMEOUT_SECS")
+            .ok()
+            .and_then(|value| value.trim().parse::<u64>().ok())
+            .filter(|value| *value > 0)
+            .unwrap_or(60);
 
-    let run_dir = create_timestamped_results_dir(&repo_root, "parity_label_volume_ratio_one_slice")
-        .expect("failed to create timestamped one-slice parity results directory");
+    let run_dir = create_timestamped_results_dir(
+        &repo_root,
+        "parity_label_volume_ratio_one_slice",
+    )
+    .expect("failed to create timestamped one-slice parity results directory");
 
     // FASTSURFER_NATIVE_OUTPUT_ROOT must be handled externally or via default temp dir
 
@@ -340,7 +366,8 @@ fn parity_label_volume_ratio_rust_inference_with_golden_files_should_compare_wit
         rust_pred.display()
     );
 
-    let _ = fs::copy(&input_nii, run_dir.join("subject140_input_native.nii.gz"));
+    let _ =
+        fs::copy(&input_nii, run_dir.join("subject140_input_native.nii.gz"));
     let _ = fs::copy(&golden_pred, run_dir.join("python_pred_golden.nii.gz"));
 
     eprintln!("[parity][one-slice] artifacts: {}", run_dir.display());
@@ -351,13 +378,16 @@ fn parity_label_volume_ratio_rust_inference_with_golden_files_should_compare_wit
 
 #[test]
 #[ignore = "Requires python3 + nibabel to compare Rust preprocessing slices with Python reference"]
-fn parity_native_preprocess_should_match_python_for_planes_edge_and_center_slices() {
+fn parity_native_preprocess_should_match_python_for_planes_edge_and_center_slices()
+ {
     let Some(repo_root) = find_repo_root() else {
         panic!("failed to locate repo root for preprocess parity test");
     };
 
     let Some(python_bin) = resolve_python_with_nibabel(&repo_root) else {
-        eprintln!("python runtime missing nibabel/numpy; skipping preprocess parity test");
+        eprintln!(
+            "python runtime missing nibabel/numpy; skipping preprocess parity test"
+        );
         return;
     };
 

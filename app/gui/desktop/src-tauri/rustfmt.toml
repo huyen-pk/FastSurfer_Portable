@@ -1,0 +1,6 @@
+# Set the maximum line width
+max_width = 80
+
+# Wrap comments to the same width
+# `wrap_comments` is unstable and requires nightly rustfmt; disable to avoid warnings
+# wrap_comments = true

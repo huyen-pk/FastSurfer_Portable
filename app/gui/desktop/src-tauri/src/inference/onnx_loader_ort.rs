@@ -50,7 +50,10 @@ fn ort_trace_timing_enabled() -> bool {
     value
         .map(|value| {
             let normalized = value.trim().to_ascii_lowercase();
-            normalized == "1" || normalized == "true" || normalized == "yes" || normalized == "on"
+            normalized == "1"
+                || normalized == "true"
+                || normalized == "yes"
+                || normalized == "on"
         })
         .unwrap_or(false)
 }
@@ -159,13 +162,17 @@ fn find_ort_dylibs_near(root: &Path, max_depth: usize) -> Vec<PathBuf> {
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_file() {
-                if let Some(name) = path.file_name().and_then(|name| name.to_str())
+                if let Some(name) =
+                    path.file_name().and_then(|name| name.to_str())
                     && is_ort_dylib_filename(name)
                 {
                     found.push(path);
                 }
             } else if path.is_dir() {
-                found.extend(find_ort_dylibs_near(&path, max_depth.saturating_sub(1)));
+                found.extend(find_ort_dylibs_near(
+                    &path,
+                    max_depth.saturating_sub(1),
+                ));
             }
         }
     }
@@ -250,8 +257,12 @@ impl OnnxModelRegistry {
             {
                 return Ok(Self {
                     axial_model_path: axial_path.to_string_lossy().to_string(),
-                    coronal_model_path: coronal_path.to_string_lossy().to_string(),
-                    sagittal_model_path: sagittal_path.to_string_lossy().to_string(),
+                    coronal_model_path: coronal_path
+                        .to_string_lossy()
+                        .to_string(),
+                    sagittal_model_path: sagittal_path
+                        .to_string_lossy()
+                        .to_string(),
                     source_dir: dir.to_string_lossy().to_string(),
                 });
             }
@@ -286,7 +297,8 @@ impl NativeOnnxSessions {
         }
 
         let t_cor = Instant::now();
-        let coronal = load_runnable_model(&registry.coronal_model_path, "coronal")?;
+        let coronal =
+            load_runnable_model(&registry.coronal_model_path, "coronal")?;
         if trace_timing {
             eprintln!(
                 "[trace][ort-onnx] loaded coronal model in {} ms",
@@ -295,7 +307,8 @@ impl NativeOnnxSessions {
         }
 
         let t_sag = Instant::now();
-        let sagittal = load_runnable_model(&registry.sagittal_model_path, "sagittal")?;
+        let sagittal =
+            load_runnable_model(&registry.sagittal_model_path, "sagittal")?;
         if trace_timing {
             eprintln!(
                 "[trace][ort-onnx] loaded sagittal model in {} ms",
@@ -343,7 +356,9 @@ impl PlaneSession {
         let element_count = shape
             .iter()
             .try_fold(1usize, |acc, dim| acc.checked_mul(*dim))
-            .ok_or_else(|| format!("{plane}: input shape overflow for {shape:?}"))?;
+            .ok_or_else(|| {
+                format!("{plane}: input shape overflow for {shape:?}")
+            })?;
 
         let max_probe_elements = 16_000_000usize;
         if element_count > max_probe_elements {
@@ -437,9 +452,9 @@ impl PlaneSession {
             .map_err(|_| format!("{plane}: ORT session mutex was poisoned"))?;
 
         let eval_started = Instant::now();
-        let outputs = session
-            .run(inputs)
-            .map_err(|error| format!("{plane}: ONNX Runtime forward pass failed: {error}"))?;
+        let outputs = session.run(inputs).map_err(|error| {
+            format!("{plane}: ONNX Runtime forward pass failed: {error}")
+        })?;
 
         if trace_timing {
             eprintln!(
@@ -450,18 +465,18 @@ impl PlaneSession {
             );
         }
 
-        let primary_name = self
-            .output_names
-            .first()
-            .ok_or_else(|| format!("{plane}: model has no declared graph outputs"))?;
+        let primary_name = self.output_names.first().ok_or_else(|| {
+            format!("{plane}: model has no declared graph outputs")
+        })?;
 
         let primary = outputs.get(primary_name).ok_or_else(|| {
             format!("{plane}: expected output '{primary_name}' not found in ORT outputs")
         })?;
 
-        let (shape, tensor_data) = primary
-            .try_extract_tensor::<f32>()
-            .map_err(|error| format!("{plane}: failed to extract f32 output tensor: {error}"))?;
+        let (shape, tensor_data) =
+            primary.try_extract_tensor::<f32>().map_err(|error| {
+                format!("{plane}: failed to extract f32 output tensor: {error}")
+            })?;
 
         let shape = shape
             .iter()
@@ -511,11 +526,15 @@ impl PlaneSession {
     }
 }
 
-fn load_runnable_model(path: &str, plane: &str) -> Result<PlaneSession, String> {
+fn load_runnable_model(
+    path: &str,
+    plane: &str,
+) -> Result<PlaneSession, String> {
     ensure_ort_initialized()?;
 
-    let mut builder = Session::builder()
-        .map_err(|error| format!("Failed to create ORT session builder for {plane}: {error}"))?;
+    let mut builder = Session::builder().map_err(|error| {
+        format!("Failed to create ORT session builder for {plane}: {error}")
+    })?;
 
     if let Some(thread_count) = ort_cpu_threads_override() {
         builder = builder.with_intra_threads(thread_count).map_err(|error| {
@@ -565,7 +584,9 @@ fn load_runnable_model(path: &str, plane: &str) -> Result<PlaneSession, String> 
         })
         .cloned()
         .or_else(|| required_input_names.first().cloned())
-        .ok_or_else(|| format!("Failed to discover {plane} ORT input name at '{path}'"))?;
+        .ok_or_else(|| {
+            format!("Failed to discover {plane} ORT input name at '{path}'")
+        })?;
 
     let output_names = session
         .outputs()
@@ -641,7 +662,8 @@ fn candidate_onnx_dirs() -> Vec<PathBuf> {
 
     if let Ok(cwd) = std::env::current_dir() {
         candidates.push(cwd.join("onnx"));
-        candidates.push(cwd.join("..").join("..").join("..").join("..").join("onnx"));
+        candidates
+            .push(cwd.join("..").join("..").join("..").join("..").join("onnx"));
     }
 
     if let Ok(exe) = std::env::current_exe()

@@ -13,8 +13,12 @@ pub mod utils;
 use crate::backend::BackendState;
 use crate::feature_flags::resolve_inference_engine;
 use crate::file_mgmt::open_result_in_file_manager;
-use crate::prediction::{run_fastsurfer_inference, run_fastsurfer_inference_with_progress};
-use crate::tasks::{AppState, cancel_fastsurfer_task, shutdown_backend_for_exit};
+use crate::prediction::{
+    run_fastsurfer_inference, run_fastsurfer_inference_with_progress,
+};
+use crate::tasks::{
+    AppState, cancel_fastsurfer_task, shutdown_backend_for_exit,
+};
 use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex};
 use tauri::Manager;
@@ -48,7 +52,9 @@ pub fn run() {
             inference_engine,
         },
         Err(err) => {
-            eprintln!("FastSurfer desktop backend initialization failed: {err}");
+            eprintln!(
+                "FastSurfer desktop backend initialization failed: {err}"
+            );
             AppState {
                 backend: None,
                 backend_init_error: Some(err),
@@ -78,7 +84,9 @@ pub fn run() {
                 if let Some(backend) = app_state.backend.as_ref()
                     && let Err(err) = backend.shutdown_for_exit()
                 {
-                    eprintln!("Failed to gracefully stop backend on app exit: {err}");
+                    eprintln!(
+                        "Failed to gracefully stop backend on app exit: {err}"
+                    );
                 }
                 app_handle.exit(0);
             }

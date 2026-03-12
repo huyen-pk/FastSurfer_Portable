@@ -1,7 +1,7 @@
 // This test suite integrates with test-containers for environment isolation.
 use super::support::{
-    create_backend_state_with_fake_responses, find_repo_root, fixture_native_input, next_test_id,
-    resolve_python_with_component_runtime,
+    create_backend_state_with_fake_responses, find_repo_root,
+    fixture_native_input, next_test_id, resolve_python_with_component_runtime,
 };
 use crate::inference::preprocess::{
     InferencePlane, load_input_volume, prepare_plane_input_for_slice,
@@ -40,7 +40,8 @@ fn start_predict_batch_without_ack_message_should_return_missing_ack_error() {
 }
 
 #[test]
-fn parity_preprocessing_should_match_original_python_components_on_native_input_fixture() {
+fn parity_preprocessing_should_match_original_python_components_on_native_input_fixture()
+ {
     let Some(repo_root) = find_repo_root() else {
         panic!("failed to locate repo root for preprocessing parity test");
     };
@@ -54,7 +55,8 @@ fn parity_preprocessing_should_match_original_python_components_on_native_input_
         return;
     }
 
-    let Some(python_bin) = resolve_python_with_component_runtime(&repo_root) else {
+    let Some(python_bin) = resolve_python_with_component_runtime(&repo_root)
+    else {
         eprintln!(
             "python runtime missing required FastSurfer component deps; skipping preprocessing parity test"
         );
@@ -78,16 +80,22 @@ fn parity_preprocessing_should_match_original_python_components_on_native_input_
             InferencePlane::Sagittal => volume.shape_xyz[0] / 2,
         };
 
-        let prepared =
-            prepare_plane_input_for_slice(&volume, plane, num_channels, base_res, center)
-                .expect("failed to prepare Rust plane input");
+        let prepared = prepare_plane_input_for_slice(
+            &volume,
+            plane,
+            num_channels,
+            base_res,
+            center,
+        )
+        .expect("failed to prepare Rust plane input");
 
         let run_dir = std::env::temp_dir().join(format!(
             "preprocess_component_parity_{}_{}",
             next_test_id(),
             plane.as_str()
         ));
-        fs::create_dir_all(&run_dir).expect("failed to create temp parity directory");
+        fs::create_dir_all(&run_dir)
+            .expect("failed to create temp parity directory");
 
         let rust_raw = run_dir.join("rust_tensor.raw");
         let mut raw_file = fs::File::create(&rust_raw)

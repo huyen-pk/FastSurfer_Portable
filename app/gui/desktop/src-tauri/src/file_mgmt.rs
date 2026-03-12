@@ -49,7 +49,10 @@ pub fn validate_result_path(result_path: &str) -> Result<PathBuf, String> {
                     canonical_path.display()
                 )
             } else {
-                format!("Cannot access directory {}: {e}", canonical_path.display())
+                format!(
+                    "Cannot access directory {}: {e}",
+                    canonical_path.display()
+                )
             }
         })?;
     } else {
@@ -105,16 +108,17 @@ pub fn open_in_file_manager(path: &Path) -> Result<(), String> {
     #[cfg(all(unix, not(target_os = "macos")))]
     {
         let target = if path.is_file() {
-            path.parent()
-                .ok_or_else(|| "File has no parent directory to open".to_string())?
+            path.parent().ok_or_else(|| {
+                "File has no parent directory to open".to_string()
+            })?
         } else {
             path
         };
 
-        let status = Command::new("xdg-open")
-            .arg(target)
-            .status()
-            .map_err(|e| format!("Failed to launch file manager (xdg-open): {e}"))?;
+        let status =
+            Command::new("xdg-open").arg(target).status().map_err(|e| {
+                format!("Failed to launch file manager (xdg-open): {e}")
+            })?;
 
         if status.success() {
             return Ok(());

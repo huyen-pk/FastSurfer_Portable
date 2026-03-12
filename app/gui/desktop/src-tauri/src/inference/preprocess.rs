@@ -1,61 +1,65 @@
-use nifti::{IntoNdArray, NiftiHeader, NiftiObject, ReaderOptions};
+use nifti::{IntoNdArray, NiftiObject, ReaderOptions};
 use std::path::PathBuf;
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum InferencePlane {
-    Coronal,
-    Axial,
-    Sagittal,
-}
-
-#[derive(Clone)]
-pub(crate) struct InputVolume {
-    pub data_xyz: Vec<f32>,
-    pub shape_xyz: [usize; 3],
-    pub zoom_xyz: [f32; 3],
-    pub header: NiftiHeader,
-}
-
-pub(crate) struct PreparedPlaneInput {
-    pub tensor_data: Vec<f32>,
-    pub tensor_shape: [usize; 4],
-    pub scale_factor: [f32; 2],
-    pub plane: InferencePlane,
-    pub slice_index: usize,
-}
+pub use crate::models::{InferencePlane, InputVolume, PreparedPlaneInput};
 
 fn is_supported_native_input_path(path: &str) -> bool {
-    let lower = path.to_ascii_lowercase();
-    lower.ends_with(".nii")
-        || lower.ends_with(".nii.gz")
-        || lower.ends_with(".mgz")
-        || lower.ends_with(".mgh")
+    let p = std::path::Path::new(path);
+    if let Some(ext) = p.extension().and_then(|s| s.to_str()) {
+        if ext.eq_ignore_ascii_case("nii")
+            || ext.eq_ignore_ascii_case("mgz")
+            || ext.eq_ignore_ascii_case("mgh")
+        {
+            return true;
+        }
+    }
+    // fallback for .nii.gz style names
+    if let Some(fname) = p.file_name().and_then(|s| s.to_str()) {
+        return fname.to_ascii_lowercase().ends_with(".nii.gz");
+    }
+    false
 }
 
 fn is_mgz_or_mgh_path(path: &str) -> bool {
-    let lower = path.to_ascii_lowercase();
-    lower.ends_with(".mgz") || lower.ends_with(".mgh")
+    let p = std::path::Path::new(path);
+    if let Some(ext) = p.extension().and_then(|s| s.to_str()) {
+        return ext.eq_ignore_ascii_case("mgz")
+            || ext.eq_ignore_ascii_case("mgh");
+    }
+    // fallback for .mgz/.mgh in filenames
+    if let Some(fname) = p.file_name().and_then(|s| s.to_str()) {
+        return fname.to_ascii_lowercase().ends_with(".mgz")
+            || fname.to_ascii_lowercase().ends_with(".mgh");
+    }
+    false
 }
 
 fn to_temp_nifti_path() -> Result<PathBuf, String> {
     let epoch_ns = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map_err(|error| format!("System clock error while creating temp NIfTI path: {error}"))?
+        .map_err(|error| {
+            format!(
+                "System clock error while creating temp NIfTI path: {error}"
+            )
+        })?
         .as_nanos();
 
-    Ok(std::env::temp_dir().join(format!("fastsurfer_native_input_{epoch_ns}.nii.gz")))
+    Ok(std::env::temp_dir()
+        .join(format!("fastsurfer_native_input_{epoch_ns}.nii.gz")))
 }
 
 fn run_mri_convert(input_path: &str, output_path: &str) -> Result<(), String> {
-    let program =
-        std::env::var("FASTSURFER_MRI_CONVERT_BIN").unwrap_or_else(|_| "mri_convert".to_string());
+    let program = std::env::var("FASTSURFER_MRI_CONVERT_BIN")
+        .unwrap_or_else(|_| "mri_convert".to_string());
     let status = Command::new(&program)
         .arg(input_path)
         .arg(output_path)
         .status()
-        .map_err(|error| format!("Failed to execute '{program}' for MGZ conversion: {error}"))?;
+        .map_err(|error| {
+            format!("Failed to execute '{program}' for MGZ conversion: {error}")
+        })?;
 
     if status.success() {
         Ok(())
@@ -66,9 +70,12 @@ fn run_mri_convert(input_path: &str, output_path: &str) -> Result<(), String> {
     }
 }
 
-fn run_python_nibabel_convert(input_path: &str, output_path: &str) -> Result<(), String> {
-    let python_bin =
-        std::env::var("FASTSURFER_PYTHON_BIN").unwrap_or_else(|_| "python3".to_string());
+fn run_python_nibabel_convert(
+    input_path: &str,
+    output_path: &str,
+) -> Result<(), String> {
+    let python_bin = std::env::var("FASTSURFER_PYTHON_BIN")
+        .unwrap_or_else(|_| "python3".to_string());
     let script = [
         "import nibabel as nib",
         "import sys",
@@ -83,7 +90,11 @@ fn run_python_nibabel_convert(input_path: &str, output_path: &str) -> Result<(),
         .arg(input_path)
         .arg(output_path)
         .status()
-        .map_err(|error| format!("Failed to execute '{python_bin}' for MGZ conversion: {error}"))?;
+        .map_err(|error| {
+            format!(
+                "Failed to execute '{python_bin}' for MGZ conversion: {error}"
+            )
+        })?;
 
     if status.success() {
         Ok(())
@@ -103,11 +114,13 @@ fn convert_mgz_to_nifti(input_path: &str) -> Result<PathBuf, String> {
         Err(_error) => {}
     }
 
-    run_python_nibabel_convert(input_path, &output_str).map(|_| output_path).map_err(|error| {
-        format!(
-            "Failed to convert MGZ/MGH input '{input_path}' to NIfTI. Tried mri_convert and python nibabel fallback. Last error: {error}"
-        )
-    })
+    run_python_nibabel_convert(input_path, &output_str)
+        .map(|()| output_path)
+        .map_err(|error| {
+            format!(
+                "Failed to convert MGZ/MGH input '{input_path}' to NIfTI. Tried mri_convert and python nibabel fallback. Last error: {error}"
+            )
+        })
 }
 
 pub(crate) fn load_input_volume(path: &str) -> Result<InputVolume, String> {
@@ -129,16 +142,15 @@ pub(crate) fn load_input_volume(path: &str) -> Result<InputVolume, String> {
 
     let obj = ReaderOptions::new()
         .read_file(&load_path)
-        .map_err(|error| format!("Failed to read NIfTI file '{}': {error}", load_path))?;
+        .map_err(|error| {
+            format!("Failed to read NIfTI file '{load_path}': {error}")
+        })?;
 
     let header = obj.header().clone();
     let volume = obj.into_volume();
-    let array = volume.into_ndarray::<f32>().map_err(|error| {
-        format!(
-            "Failed to materialize NIfTI volume '{}' as ndarray: {error}",
-            load_path
-        )
-    })?;
+    let array = volume
+        .into_ndarray::<f32>()
+        .map_err(|error| format!("Failed to materialize NIfTI volume '{load_path}' as ndarray: {error}"))?;
 
     let shape = array.shape();
     if shape.len() < 3 {
@@ -195,23 +207,28 @@ pub(crate) fn prepare_plane_input_for_slice(
     let [h, w, count] = transformed_volume_shape(volume.shape_xyz, plane);
 
     if count == 0 || h == 0 || w == 0 {
-        return Err("Invalid transformed volume shape encountered in preprocessing".to_string());
+        return Err(
+            "Invalid transformed volume shape encountered in preprocessing"
+                .to_string(),
+        );
     }
 
     if slice_index >= count {
         return Err(format!(
-            "Requested slice index {} out of range for plane {} with {} slices",
-            slice_index,
-            plane.as_str(),
-            count
+            "Requested slice index {slice_index} out of range for plane {} with {count} slices",
+            plane.as_str()
         ));
     }
 
     let mut tensor_data = vec![0f32; channels * h * w];
 
     for ch in 0..channels {
-        let relative = (ch as isize) - (slice_thickness as isize);
-        let slice = clamp_index((slice_index as isize) + relative, count);
+        let relative = isize::try_from(ch).unwrap_or(0)
+            - isize::try_from(slice_thickness).unwrap_or(0);
+        let slice = clamp_index(
+            isize::try_from(slice_index).unwrap_or(0) + relative,
+            count,
+        );
         for ih in 0..h {
             for iw in 0..w {
                 let voxel = oriented_voxel(volume, plane, ih, iw, slice);
@@ -222,7 +239,8 @@ pub(crate) fn prepare_plane_input_for_slice(
         }
     }
 
-    let scale = scale_factor(base_res, transformed_zoom(volume.zoom_xyz, plane));
+    let scale =
+        scale_factor(base_res, transformed_zoom(volume.zoom_xyz, plane));
 
     Ok(PreparedPlaneInput {
         tensor_data,
@@ -273,21 +291,11 @@ fn clamp_index(value: isize, upper_exclusive: usize) -> usize {
         return 0;
     }
     let max_index = upper_exclusive - 1;
-    let as_usize = value as usize;
+    let as_usize = usize::try_from(value).unwrap_or(0);
     if as_usize > max_index {
         max_index
     } else {
         as_usize
-    }
-}
-
-impl InferencePlane {
-    pub(crate) fn as_str(self) -> &'static str {
-        match self {
-            Self::Coronal => "coronal",
-            Self::Axial => "axial",
-            Self::Sagittal => "sagittal",
-        }
     }
 }
 
@@ -311,7 +319,10 @@ pub(crate) fn transformed_volume_shape(
     }
 }
 
-pub(crate) fn transformed_zoom(orig_zoom_xyz: [f32; 3], plane: InferencePlane) -> [f32; 2] {
+pub(crate) fn transformed_zoom(
+    orig_zoom_xyz: [f32; 3],
+    plane: InferencePlane,
+) -> [f32; 2] {
     let [zx, zy, zz] = orig_zoom_xyz;
     match plane {
         InferencePlane::Coronal => [zx, zy],
@@ -320,7 +331,10 @@ pub(crate) fn transformed_zoom(orig_zoom_xyz: [f32; 3], plane: InferencePlane) -
     }
 }
 
-pub(crate) fn scale_factor(base_res: f32, transformed_zoom: [f32; 2]) -> [f32; 2] {
+pub(crate) fn scale_factor(
+    base_res: f32,
+    transformed_zoom: [f32; 2],
+) -> [f32; 2] {
     [
         base_res / transformed_zoom[0],
         base_res / transformed_zoom[1],
@@ -345,7 +359,8 @@ pub(crate) fn build_legacy_preprocessing_trace(
     let slice_thickness = slice_thickness_from_num_channels(num_channels);
     let channels = thick_slice_channel_count(slice_thickness);
     let canonical_coronal_shape = [256usize, 256usize, 256usize];
-    let oriented_shape = transformed_volume_shape(canonical_coronal_shape, plane);
+    let oriented_shape =
+        transformed_volume_shape(canonical_coronal_shape, plane);
     let batched_shape = batched_tensor_shape(oriented_shape, slice_thickness);
     let zoom = transformed_zoom(orig_zoom_xyz, plane);
     let scale = scale_factor(base_res, zoom);

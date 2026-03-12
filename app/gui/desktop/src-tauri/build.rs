@@ -28,7 +28,9 @@ fn stage_ort_runtime() -> Result<(), String> {
         ));
     }
 
-    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").map_err(|e| e.to_string())?);
+    let manifest_dir = PathBuf::from(
+        env::var("CARGO_MANIFEST_DIR").map_err(|e| e.to_string())?,
+    );
     let out_dir = manifest_dir
         .join("resources")
         .join("ort")
@@ -114,7 +116,8 @@ fn stage_ort_runtime() -> Result<(), String> {
 
 fn resolve_ort_runtime_dir() -> Result<PathBuf, String> {
     let manifest_dir = PathBuf::from(
-        env::var("CARGO_MANIFEST_DIR").map_err(|e| format!("missing CARGO_MANIFEST_DIR: {e}"))?,
+        env::var("CARGO_MANIFEST_DIR")
+            .map_err(|e| format!("missing CARGO_MANIFEST_DIR: {e}"))?,
     );
 
     if let Some(explicit) = env::var_os("FASTSURFER_ORT_RUNTIME_DIR") {
@@ -174,8 +177,9 @@ fn dir_contains_runtime_files(dir: &std::path::Path) -> Result<bool, String> {
         return Ok(false);
     }
 
-    let entries = fs::read_dir(dir)
-        .map_err(|e| format!("failed to read runtime dir '{}': {e}", dir.display()))?;
+    let entries = fs::read_dir(dir).map_err(|e| {
+        format!("failed to read runtime dir '{}': {e}", dir.display())
+    })?;
     for entry in entries.flatten() {
         let path = entry.path();
         if !path.is_file() {
@@ -192,10 +196,14 @@ fn dir_contains_runtime_files(dir: &std::path::Path) -> Result<bool, String> {
     Ok(false)
 }
 
-fn download_ort_runtime_if_missing(download_root: &std::path::Path) -> Result<PathBuf, String> {
-    let version = env::var("FASTSURFER_ORT_VERSION").unwrap_or_else(|_| "1.23.2".to_string());
+fn download_ort_runtime_if_missing(
+    download_root: &std::path::Path,
+) -> Result<PathBuf, String> {
+    let version = env::var("FASTSURFER_ORT_VERSION")
+        .unwrap_or_else(|_| "1.23.2".to_string());
     let platform = platform_folder();
-    let runtime_dir = download_root.join(platform).join(&version).join("runtime");
+    let runtime_dir =
+        download_root.join(platform).join(&version).join("runtime");
 
     if dir_contains_runtime_files(&runtime_dir)? {
         println!(
@@ -214,7 +222,8 @@ fn download_ort_runtime_if_missing(download_root: &std::path::Path) -> Result<Pa
 
     let (file_name, default_url, is_zip) = ort_download_spec(&version);
     let url = env::var("FASTSURFER_ORT_DOWNLOAD_URL").unwrap_or(default_url);
-    let archive_path = download_root.join(platform).join(&version).join(file_name);
+    let archive_path =
+        download_root.join(platform).join(&version).join(file_name);
 
     if let Some(parent) = archive_path.parent() {
         fs::create_dir_all(parent).map_err(|e| {
@@ -279,13 +288,16 @@ fn download_ort_runtime_if_missing(download_root: &std::path::Path) -> Result<Pa
     ))
 }
 
-fn find_runtime_dir_with_libs(root: &std::path::Path) -> Result<Option<PathBuf>, String> {
+fn find_runtime_dir_with_libs(
+    root: &std::path::Path,
+) -> Result<Option<PathBuf>, String> {
     if dir_contains_runtime_files(root)? {
         return Ok(Some(root.to_path_buf()));
     }
 
-    let entries = fs::read_dir(root)
-        .map_err(|e| format!("failed to scan ORT extracted dir '{}': {e}", root.display()))?;
+    let entries = fs::read_dir(root).map_err(|e| {
+        format!("failed to scan ORT extracted dir '{}': {e}", root.display())
+    })?;
     for entry in entries.flatten() {
         let path = entry.path();
         if !path.is_dir() {
@@ -296,11 +308,13 @@ fn find_runtime_dir_with_libs(root: &std::path::Path) -> Result<Option<PathBuf>,
             return Ok(Some(path));
         }
 
-        let nested = fs::read_dir(&path)
-            .map_err(|e| format!("failed to scan nested ORT dir '{}': {e}", path.display()))?;
+        let nested = fs::read_dir(&path).map_err(|e| {
+            format!("failed to scan nested ORT dir '{}': {e}", path.display())
+        })?;
         for nested_entry in nested.flatten() {
             let nested_path = nested_entry.path();
-            if nested_path.is_dir() && dir_contains_runtime_files(&nested_path)? {
+            if nested_path.is_dir() && dir_contains_runtime_files(&nested_path)?
+            {
                 return Ok(Some(nested_path));
             }
         }
@@ -353,7 +367,9 @@ fn ort_download_spec(version: &str) -> (&'static str, String, bool) {
         all(target_os = "windows", target_arch = "x86_64")
     )))]
     {
-        panic!("automatic ORT runtime download is not configured for this target platform/arch")
+        panic!(
+            "automatic ORT runtime download is not configured for this target platform/arch"
+        )
     }
 }
 

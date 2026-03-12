@@ -1,11 +1,14 @@
 // This test suite integrates with test-containers for environment isolation.
 use crate::backend::BackendState;
 use crate::inference::preprocess::{
-    InferencePlane, load_input_volume, oriented_to_xyz, prepare_plane_input_for_slice,
+    load_input_volume, oriented_to_xyz, prepare_plane_input_for_slice,
     transformed_volume_shape,
 };
 use crate::inference::run_native_inference;
-use crate::process_mgmt::{BackendLaunchCommand, BackendProcess, resolve_python_executable};
+use crate::models::InferencePlane;
+use crate::process_mgmt::{
+    BackendLaunchCommand, BackendProcess, resolve_python_executable,
+};
 use nifti::{IntoNdArray, NiftiObject, ReaderOptions};
 use std::fs;
 use std::io::{BufReader, Write};
@@ -22,7 +25,9 @@ pub(super) fn next_test_id() -> usize {
     NEXT_ID.fetch_add(1, Ordering::Relaxed)
 }
 
-pub(super) fn create_backend_state_with_fake_responses(responses: &[&str]) -> BackendState {
+pub(super) fn create_backend_state_with_fake_responses(
+    responses: &[&str],
+) -> BackendState {
     let mut branches = String::new();
     for (index, response) in responses.iter().enumerate() {
         branches.push_str(&format!("{index}) printf '%s\\n' '{response}' ;;"));
@@ -67,7 +72,9 @@ pub(super) fn create_backend_state_with_fake_responses(responses: &[&str]) -> Ba
     }
 }
 
-pub(super) fn create_backend_state_via_shell_script(script: &str) -> BackendState {
+pub(super) fn create_backend_state_via_shell_script(
+    script: &str,
+) -> BackendState {
     let mut child = Command::new("sh")
         .arg("-c")
         .arg(script)
@@ -103,7 +110,9 @@ pub(super) fn create_backend_state_via_shell_script(script: &str) -> BackendStat
     }
 }
 
-pub(super) fn create_backend_state_via_process(mut child: std::process::Child) -> BackendState {
+pub(super) fn create_backend_state_via_process(
+    mut child: std::process::Child,
+) -> BackendState {
     let stdin = child.stdin.take().expect("failed to capture process stdin");
     let stdout = child
         .stdout
@@ -127,7 +136,9 @@ pub(super) fn create_backend_state_via_process(mut child: std::process::Child) -
     }
 }
 
-pub(super) fn spawn_python_backend_inline(script: &str) -> Option<BackendState> {
+pub(super) fn spawn_python_backend_inline(
+    script: &str,
+) -> Option<BackendState> {
     let python = resolve_python_executable()?;
     let child = Command::new(python)
         .arg("-u")
@@ -163,7 +174,10 @@ pub(super) fn is_ci() -> bool {
         .unwrap_or(false)
 }
 
-pub(super) fn python_has_fastsurfer_runtime(python_bin: &str, repo_root: &Path) -> bool {
+pub(super) fn python_has_fastsurfer_runtime(
+    python_bin: &str,
+    repo_root: &Path,
+) -> bool {
     Command::new(python_bin)
         .arg("-c")
         .arg("import torch, FastSurferCNN")
@@ -177,7 +191,10 @@ pub(super) fn python_has_fastsurfer_runtime(python_bin: &str, repo_root: &Path) 
         .unwrap_or(false)
 }
 
-pub(super) fn python_has_nibabel_runtime(python_bin: &str, repo_root: &Path) -> bool {
+pub(super) fn python_has_nibabel_runtime(
+    python_bin: &str,
+    repo_root: &Path,
+) -> bool {
     Command::new(python_bin)
         .arg("-c")
         .arg("import nibabel, numpy")
@@ -203,7 +220,9 @@ pub(super) fn resolve_python_with_nibabel(repo_root: &Path) -> Option<String> {
         .find(|candidate| python_has_nibabel_runtime(candidate, repo_root))
 }
 
-pub(super) fn resolve_python_with_component_runtime(repo_root: &Path) -> Option<String> {
+pub(super) fn resolve_python_with_component_runtime(
+    repo_root: &Path,
+) -> Option<String> {
     let mut candidates = Vec::<String>::new();
     if let Some(resolved) = resolve_python_executable() {
         candidates.push(resolved);
@@ -245,12 +264,12 @@ pub(super) fn convert_mgz_to_nii_gz(
     input_mgz: &Path,
     output_nii_gz: &Path,
 ) -> Result<(), String> {
-    let script = r#"
+    let script = r"
 import nibabel as nib
 import sys
 img = nib.load(sys.argv[1])
 nib.save(img, sys.argv[2])
-"#;
+";
 
     let status = Command::new(python_bin)
         .arg("-c")
@@ -258,7 +277,9 @@ nib.save(img, sys.argv[2])
         .arg(input_mgz)
         .arg(output_nii_gz)
         .status()
-        .map_err(|error| format!("failed to spawn python conversion command: {error}"))?;
+        .map_err(|error| {
+            format!("failed to spawn python conversion command: {error}")
+        })?;
 
     if !status.success() {
         return Err(format!(
@@ -272,10 +293,12 @@ nib.save(img, sys.argv[2])
     Ok(())
 }
 
-fn load_nifti_labels_as_i32(path: &Path) -> Result<(Vec<i32>, Vec<usize>), String> {
-    let obj = ReaderOptions::new()
-        .read_file(path)
-        .map_err(|error| format!("failed to read NIfTI '{}': {error}", path.display()))?;
+fn load_nifti_labels_as_i32(
+    path: &Path,
+) -> Result<(Vec<i32>, Vec<usize>), String> {
+    let obj = ReaderOptions::new().read_file(path).map_err(|error| {
+        format!("failed to read NIfTI '{}': {error}", path.display())
+    })?;
 
     let volume = obj.into_volume();
     let array = volume.into_ndarray::<f32>().map_err(|error| {
@@ -298,7 +321,8 @@ pub(super) fn ensure_native_input_nifti(
     repo_root: &Path,
     python_bin: &str,
 ) -> Result<PathBuf, String> {
-    let fixture_dir = repo_root.join("app/gui/desktop/src-tauri/testing/data/.tmp_e2e_output_py");
+    let fixture_dir = repo_root
+        .join("app/gui/desktop/src-tauri/testing/data/.tmp_e2e_output_py");
     fs::create_dir_all(&fixture_dir).map_err(|error| {
         format!(
             "failed to create fixture directory '{}': {error}",
@@ -311,10 +335,13 @@ pub(super) fn ensure_native_input_nifti(
         return Ok(input_nii);
     }
 
-    let input_mgz =
-        repo_root.join("app/gui/desktop/src-tauri/testing/data/Subject140/140_orig.mgz");
+    let input_mgz = repo_root
+        .join("app/gui/desktop/src-tauri/testing/data/Subject140/140_orig.mgz");
     if !input_mgz.exists() {
-        return Err(format!("missing test input file: {}", input_mgz.display()));
+        return Err(format!(
+            "missing test input file: {}",
+            input_mgz.display()
+        ));
     }
 
     convert_mgz_to_nii_gz(python_bin, &input_mgz, &input_nii)?;
@@ -357,7 +384,9 @@ if ratio > 0.25:
         .arg(rust_pred)
         .arg(py_pred)
         .output()
-        .map_err(|error| format!("failed to execute python volume comparison: {error}"))?;
+        .map_err(|error| {
+            format!("failed to execute python volume comparison: {error}")
+        })?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -389,9 +418,13 @@ pub(super) fn compare_label_volumes_per_plane_single_slice_in_rust(
 
     let rust_shape_xyz = [rust_shape[0], rust_shape[1], rust_shape[2]];
     let gold_shape_xyz = [gold_shape[0], gold_shape[1], gold_shape[2]];
-    let rust_expected_len = rust_shape_xyz[0] * rust_shape_xyz[1] * rust_shape_xyz[2];
-    let gold_expected_len = gold_shape_xyz[0] * gold_shape_xyz[1] * gold_shape_xyz[2];
-    if rust_labels.len() != rust_expected_len || gold_labels.len() != gold_expected_len {
+    let rust_expected_len =
+        rust_shape_xyz[0] * rust_shape_xyz[1] * rust_shape_xyz[2];
+    let gold_expected_len =
+        gold_shape_xyz[0] * gold_shape_xyz[1] * gold_shape_xyz[2];
+    if rust_labels.len() != rust_expected_len
+        || gold_labels.len() != gold_expected_len
+    {
         return Err(format!(
             "voxel count mismatch with shape rust={:?} golden={:?}: rust={} golden={} expected_rust={} expected_golden={}",
             rust_shape_xyz,
@@ -425,18 +458,18 @@ pub(super) fn compare_label_volumes_per_plane_single_slice_in_rust(
         InferencePlane::Axial,
         InferencePlane::Sagittal,
     ] {
-        let [h, w, slices] = transformed_volume_shape(compare_shape_xyz, plane);
-        if slices == 0 {
+        let [height, width, slices_count] =
+            transformed_volume_shape(compare_shape_xyz, plane);
+        if slices_count == 0 {
             return Err(format!("plane {} has zero slices", plane.as_str()));
         }
-
-        let slice_index = slices / 2;
+        let slice_index = slices_count / 2;
         let mut diff = 0usize;
         let mut total = 0usize;
 
-        for ih in 0..h {
-            for iw in 0..w {
-                let (x, y, z) = oriented_to_xyz(plane, ih, iw, slice_index);
+        for row in 0..height {
+            for col in 0..width {
+                let (x, y, z) = oriented_to_xyz(plane, row, col, slice_index);
                 let rx = x + rust_offset_xyz[0];
                 let ry = y + rust_offset_xyz[1];
                 let rz = z + rust_offset_xyz[2];
@@ -444,10 +477,12 @@ pub(super) fn compare_label_volumes_per_plane_single_slice_in_rust(
                 let gy = y + gold_offset_xyz[1];
                 let gz = z + gold_offset_xyz[2];
 
-                let rust_offset =
-                    (rx * rust_shape_xyz[1] * rust_shape_xyz[2]) + (ry * rust_shape_xyz[2]) + rz;
-                let gold_offset =
-                    (gx * gold_shape_xyz[1] * gold_shape_xyz[2]) + (gy * gold_shape_xyz[2]) + gz;
+                let rust_offset = (rx * rust_shape_xyz[1] * rust_shape_xyz[2])
+                    + (ry * rust_shape_xyz[2])
+                    + rz;
+                let gold_offset = (gx * gold_shape_xyz[1] * gold_shape_xyz[2])
+                    + (gy * gold_shape_xyz[2])
+                    + gz;
 
                 if rust_labels[rust_offset] != gold_labels[gold_offset] {
                     diff += 1;
@@ -488,8 +523,13 @@ pub(super) fn compare_preprocess_slice_with_python(
     slice_index: usize,
 ) -> Result<(), String> {
     let volume = load_input_volume(&input_nii.to_string_lossy())?;
-    let prepared =
-        prepare_plane_input_for_slice(&volume, plane, num_channels, base_res, slice_index)?;
+    let prepared = prepare_plane_input_for_slice(
+        &volume,
+        plane,
+        num_channels,
+        base_res,
+        slice_index,
+    )?;
 
     let run_dir = std::env::temp_dir().join(format!(
         "preproc_parity_{}_{}",
@@ -610,7 +650,9 @@ if not np.allclose(rust_image, py_image, rtol=0.0, atol=1e-6):
         .arg(&rust_raw)
         .current_dir(repo_root)
         .output()
-        .map_err(|error| format!("failed to execute python preprocess parity check: {error}"))?;
+        .map_err(|error| {
+            format!("failed to execute python preprocess parity check: {error}")
+        })?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -631,7 +673,10 @@ fn parse_bool_env(name: &str) -> bool {
     std::env::var(name)
         .map(|value| {
             let normalized = value.trim().to_ascii_lowercase();
-            normalized == "1" || normalized == "true" || normalized == "yes" || normalized == "on"
+            normalized == "1"
+                || normalized == "true"
+                || normalized == "yes"
+                || normalized == "on"
         })
         .unwrap_or(false)
 }
@@ -645,7 +690,9 @@ pub(super) fn configured_slice_indices(total_slices: usize) -> Vec<usize> {
         return (0..total_slices).collect::<Vec<usize>>();
     }
 
-    if let Ok(indices_csv) = std::env::var("FASTSURFER_PREPROCESS_SLICE_INDICES") {
+    if let Ok(indices_csv) =
+        std::env::var("FASTSURFER_PREPROCESS_SLICE_INDICES")
+    {
         let parsed = indices_csv
             .split(',')
             .filter_map(|part| part.trim().parse::<usize>().ok())

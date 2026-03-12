@@ -1,4 +1,39 @@
+use nifti::NiftiHeader;
 use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InferencePlane {
+    Coronal,
+    Axial,
+    Sagittal,
+}
+
+impl InferencePlane {
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Coronal => "coronal",
+            Self::Axial => "axial",
+            Self::Sagittal => "sagittal",
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct InputVolume {
+    pub data_xyz: Vec<f32>,
+    pub shape_xyz: [usize; 3],
+    pub zoom_xyz: [f32; 3],
+    pub header: NiftiHeader,
+}
+
+pub struct PreparedPlaneInput {
+    pub tensor_data: Vec<f32>,
+    pub tensor_shape: [usize; 4],
+    pub scale_factor: [f32; 2],
+    pub plane: InferencePlane,
+    pub slice_index: usize,
+}
 
 /// Additional output artifact paths produced from a segmentation result.
 #[derive(Serialize, Deserialize, Clone, Default)]
@@ -60,7 +95,7 @@ pub struct ProcessingRunResult {
 pub struct InferenceProgressEvent {
     /// Unique identifier for the batch task.
     pub task_id: String,
-    /// Current status of the task (e.g., "started", "item_progress", "completed", "failed", "cancelled").
+    /// Current status of the task (e.g., "started", `item_progress`, "completed", "failed", "cancelled").
     pub status: String,
     /// Descriptive message about the current operation.
     pub message: String,

@@ -11,7 +11,8 @@ use tauri::Listener;
 async fn test_native_inference_reports_progress_in_real_time() {
     let app = setup_test_app();
     let app_handle = app.handle();
-    let repo_root = find_repo_root().expect("failed to locate repo root for native bdd test");
+    let repo_root = find_repo_root()
+        .expect("failed to locate repo root for native bdd test");
 
     // REQUIREMENT: The following environment variables must be set externally for this BDD test to run.
     // We skip if not set to avoid unsafe { std::env::set_var(...) } which is denied in this crate.
@@ -24,8 +25,8 @@ async fn test_native_inference_reports_progress_in_real_time() {
         }
     }
 
-    let input_path =
-        repo_root.join("app/gui/desktop/src-tauri/testing/data/Subject140/140_orig.mgz");
+    let input_path = repo_root
+        .join("app/gui/desktop/src-tauri/testing/data/Subject140/140_orig.mgz");
     if !input_path.exists() {
         println!("Skipping test: input file not found");
         return;
@@ -34,11 +35,13 @@ async fn test_native_inference_reports_progress_in_real_time() {
     let cancelled_tasks = Arc::new(Mutex::new(BTreeSet::new()));
     let task_id = "bdd-progress-task-001".to_string();
 
-    let (tx, mut rx) = tokio::sync::mpsc::channel::<InferenceProgressEvent>(100);
+    let (tx, mut rx) =
+        tokio::sync::mpsc::channel::<InferenceProgressEvent>(100);
 
     let task_id_clone = task_id.clone();
     app_handle.listen_any("fastsurfer://inference-progress", move |event| {
-        if let Ok(progress_event) = serde_json::from_str::<InferenceProgressEvent>(event.payload())
+        if let Ok(progress_event) =
+            serde_json::from_str::<InferenceProgressEvent>(event.payload())
         {
             if progress_event.task_id == task_id_clone {
                 let _ = tx.blocking_send(progress_event);

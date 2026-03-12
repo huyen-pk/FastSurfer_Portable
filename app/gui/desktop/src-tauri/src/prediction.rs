@@ -1,7 +1,11 @@
 use crate::backend::BackendState;
 use crate::feature_flags::InferenceEngine;
-use crate::inference::{run_native_inference, run_native_inference_with_progress};
-use crate::models::{InferenceOutput, InferenceProgressEvent, ProcessingRunResult};
+use crate::inference::{
+    run_native_inference, run_native_inference_with_progress,
+};
+use crate::models::{
+    InferenceOutput, InferenceProgressEvent, ProcessingRunResult,
+};
 use crate::tasks::AppState;
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -11,6 +15,260 @@ use tauri::{AppHandle, Emitter, State};
 /// Helper to emit internal progress events to the frontend.
 fn emit_progress_event(app_handle: &AppHandle, event: InferenceProgressEvent) {
     let _ = app_handle.emit("fastsurfer://inference-progress", event);
+}
+
+fn ensure_backend<'a>(
+    backend: Option<&'a BackendState>,
+    backend_init_error: Option<&'a str>,
+) -> Result<&'a BackendState, String> {
+    backend.ok_or_else(|| {
+        let detail = backend_init_error
+            .unwrap_or("unknown backend initialization error");
+        format!("Backend is unavailable in this desktop runtime: {detail}")
+    })
+}
+
+fn emit_started_event(
+    app_handle: &AppHandle,
+    task_id: &str,
+    start_ack_message: &str,
+    total: usize,
+) {
+    emit_progress_event(
+        app_handle,
+        InferenceProgressEvent {
+            task_id: task_id.to_string(),
+            status: "started".to_string(),
+            message: start_ack_message.to_string(),
+            total,
+            completed: 0,
+            progress: 0,
+            current_path: None,
+            output_path: None,
+        },
+    );
+}
+
+fn emit_item_progress_event(
+    app_handle: &AppHandle,
+    task_id: &str,
+    index: usize,
+    total: usize,
+    progress: u8,
+    input_path: &str,
+    message: String,
+) {
+    emit_progress_event(
+        app_handle,
+        InferenceProgressEvent {
+            task_id: task_id.to_string(),
+            status: "item_progress".to_string(),
+            message,
+            total,
+            completed: index,
+            progress,
+            current_path: Some(input_path.to_string()),
+            output_path: None,
+        },
+    );
+}
+
+fn emit_item_completed_event(
+    app_handle: &AppHandle,
+    task_id: &str,
+    index: usize,
+    total: usize,
+    output_path: &str,
+) {
+    let completed = index + 1;
+    let progress = if total == 0 {
+        100
+    } else {
+        u8::try_from(((completed * 100) / total).min(100)).unwrap_or(100)
+    };
+
+    emit_progress_event(
+        app_handle,
+        InferenceProgressEvent {
+            task_id: task_id.to_string(),
+            status: "item_completed".to_string(),
+            message: format!("Processed {completed}/{total}"),
+            total,
+            completed,
+            progress,
+            current_path: None,
+            output_path: Some(output_path.to_string()),
+        },
+    );
+}
+
+fn emit_cancelled_event(
+    app_handle: &AppHandle,
+    task_id: &str,
+    total: usize,
+    completed: usize,
+) {
+    let progress = if total == 0 {
+        0
+    } else {
+        u8::try_from(((completed * 100) / total).min(100)).unwrap_or(100)
+    };
+
+    emit_progress_event(
+        app_handle,
+        InferenceProgressEvent {
+            task_id: task_id.to_string(),
+            status: "cancelled".to_string(),
+            message: "Task cancelled by user.".to_string(),
+            total,
+            completed,
+            progress,
+            current_path: None,
+            output_path: None,
+        },
+    );
+}
+
+fn emit_failed_event(
+    app_handle: &AppHandle,
+    task_id: String,
+    total: usize,
+    completed: usize,
+    message: String,
+) {
+    let progress = if total == 0 {
+        0
+    } else {
+        u8::try_from(((completed * 100) / total).min(100)).unwrap_or(100)
+    };
+
+    emit_progress_event(
+        app_handle,
+        InferenceProgressEvent {
+            task_id,
+            status: "failed".to_string(),
+            message,
+            total,
+            completed,
+            progress,
+            current_path: None,
+            output_path: None,
+        },
+    );
+}
+
+fn add_result_directory(set: &mut BTreeSet<String>, path: &str) {
+    if let Some(parent) = Path::new(path).parent() {
+        set.insert(parent.to_string_lossy().to_string());
+    }
+}
+
+fn finalize_ack_message(start_ack: &str, dirs: &[String]) -> String {
+    if dirs.is_empty() {
+        start_ack.to_string()
+    } else {
+        format!("{} Results directory: {}", start_ack, dirs.join(", "))
+    }
+}
+
+fn process_requested_paths(
+    backend: &BackendState,
+    requested_paths: &[String],
+    cancelled_tasks: &Arc<Mutex<BTreeSet<String>>>,
+    app_handle: &AppHandle,
+    task_id: &str,
+) -> Result<(Vec<InferenceOutput>, BTreeSet<String>), String> {
+    let total = requested_paths.len();
+    let mut results: Vec<InferenceOutput> = Vec::with_capacity(total);
+    let mut result_directories: BTreeSet<String> = BTreeSet::new();
+
+    for (index, input_path) in requested_paths.iter().enumerate() {
+        let is_cancelled = cancelled_tasks
+            .lock()
+            .map_err(|_| "Cancelled tasks mutex was poisoned".to_string())?
+            .contains(task_id);
+
+        if is_cancelled {
+            emit_cancelled_event(app_handle, task_id, total, index);
+            if let Ok(mut cancelled) = cancelled_tasks.lock() {
+                cancelled.remove(task_id);
+            }
+            return Err("Task cancelled by user.".to_string());
+        }
+
+        let mut intra_file_progress =
+            |file_progress: usize, file_message: String| {
+                let safe_file_progress = file_progress.min(100);
+                let overall_progress = if total == 0 {
+                    u8::try_from(safe_file_progress).unwrap_or(100)
+                } else {
+                    u8::try_from(
+                        ((((index * 100) + safe_file_progress) / total)
+                            .min(100)),
+                    )
+                    .unwrap_or(100)
+                };
+
+                emit_item_progress_event(
+                    app_handle,
+                    task_id,
+                    index,
+                    total,
+                    overall_progress,
+                    input_path,
+                    file_message,
+                );
+            };
+
+        match backend.predict_single_path(
+            input_path,
+            task_id,
+            Some(&mut intra_file_progress),
+        ) {
+            Ok(prediction) => {
+                add_result_directory(
+                    &mut result_directories,
+                    &prediction.output_path,
+                );
+                emit_item_completed_event(
+                    app_handle,
+                    task_id,
+                    index,
+                    total,
+                    &prediction.output_path,
+                );
+                results.push(prediction);
+            }
+            Err(error) => {
+                let was_cancelled = cancelled_tasks
+                    .lock()
+                    .map_err(|_| {
+                        "Cancelled tasks mutex was poisoned".to_string()
+                    })?
+                    .contains(task_id);
+
+                if was_cancelled {
+                    emit_cancelled_event(app_handle, task_id, total, index);
+                    if let Ok(mut cancelled) = cancelled_tasks.lock() {
+                        cancelled.remove(task_id);
+                    }
+                    let _ = backend.restart_backend_process();
+                    return Err("Task cancelled by user.".to_string());
+                }
+
+                emit_failed_event(
+                    app_handle,
+                    task_id.to_string(),
+                    total,
+                    index,
+                    error.clone(),
+                );
+                return Err(error);
+            }
+        }
+    }
+
+    Ok((results, result_directories))
 }
 
 /// Helper that orchestrates the batch prediction flow by calling the backend.
@@ -49,7 +307,8 @@ pub(crate) fn run_fastsurfer_inference_with_app_state(
     folder_paths: Vec<String>,
 ) -> Result<ProcessingRunResult, String> {
     let backend = backend.ok_or_else(|| {
-        let detail = backend_init_error.unwrap_or("unknown backend initialization error");
+        let detail = backend_init_error
+            .unwrap_or("unknown backend initialization error");
         format!("Backend is unavailable in this desktop runtime: {detail}")
     })?;
 
@@ -75,184 +334,26 @@ pub fn run_fastsurfer_inference_with_progress_with_app_state(
         file_paths.len(),
         folder_paths.len()
     );
+    let backend = ensure_backend(backend, backend_init_error)?;
 
-    let backend = backend.ok_or_else(|| {
-        let detail = backend_init_error.unwrap_or("unknown backend initialization error");
-        format!("Backend is unavailable in this desktop runtime: {detail}")
-    })?;
-
-    let (start_ack_message, requested_paths) =
+    let (start_ack_message, requested_paths): (String, Vec<String>) =
         backend.start_predict_batch(&file_paths, &folder_paths)?;
     let total = requested_paths.len();
 
-    emit_progress_event(
+    emit_started_event(app_handle, &task_id, &start_ack_message, total);
+
+    let (results, result_directories) = process_requested_paths(
+        backend,
+        &requested_paths,
+        cancelled_tasks,
         app_handle,
-        InferenceProgressEvent {
-            task_id: task_id.clone(),
-            status: "started".to_string(),
-            message: start_ack_message.clone(),
-            total,
-            completed: 0,
-            progress: 0,
-            current_path: None,
-            output_path: None,
-        },
-    );
+        &task_id,
+    )?;
 
-    let mut results: Vec<InferenceOutput> = Vec::with_capacity(total);
-    let mut result_directories: BTreeSet<String> = BTreeSet::new();
-
-    for (index, input_path) in requested_paths.iter().enumerate() {
-        let is_cancelled = cancelled_tasks
-            .lock()
-            .map_err(|_| "Cancelled tasks mutex was poisoned".to_string())?
-            .contains(&task_id);
-        if is_cancelled {
-            emit_progress_event(
-                app_handle,
-                InferenceProgressEvent {
-                    task_id: task_id.clone(),
-                    status: "cancelled".to_string(),
-                    message: "Task cancelled by user.".to_string(),
-                    total,
-                    completed: index,
-                    progress: if total == 0 {
-                        0
-                    } else {
-                        (((index * 100) / total).min(100)) as u8
-                    },
-                    current_path: None,
-                    output_path: None,
-                },
-            );
-
-            if let Ok(mut cancelled) = cancelled_tasks.lock() {
-                cancelled.remove(&task_id);
-            }
-
-            return Err("Task cancelled by user.".to_string());
-        }
-
-        let mut intra_file_progress = |file_progress: usize, file_message: String| {
-            let safe_file_progress = file_progress.min(100);
-            let overall_progress = if total == 0 {
-                safe_file_progress as u8
-            } else {
-                ((((index * 100) + safe_file_progress) / total).min(100)) as u8
-            };
-
-            emit_progress_event(
-                app_handle,
-                InferenceProgressEvent {
-                    task_id: task_id.clone(),
-                    status: "item_progress".to_string(),
-                    message: file_message,
-                    total,
-                    completed: index,
-                    progress: overall_progress,
-                    current_path: Some(input_path.clone()),
-                    output_path: None,
-                },
-            );
-        };
-
-        match backend.predict_single_path(input_path, &task_id, Some(&mut intra_file_progress)) {
-            Ok(prediction) => {
-                if let Some(parent) = Path::new(&prediction.output_path).parent() {
-                    result_directories.insert(parent.to_string_lossy().to_string());
-                }
-
-                let completed = index + 1;
-                let progress = if total == 0 {
-                    100
-                } else {
-                    (((completed * 100) / total).min(100)) as u8
-                };
-
-                emit_progress_event(
-                    app_handle,
-                    InferenceProgressEvent {
-                        task_id: task_id.clone(),
-                        status: "item_completed".to_string(),
-                        message: format!("Processed {completed}/{total}"),
-                        total,
-                        completed,
-                        progress,
-                        current_path: Some(input_path.clone()),
-                        output_path: Some(prediction.output_path.clone()),
-                    },
-                );
-
-                results.push(prediction);
-            }
-            Err(error) => {
-                let was_cancelled = cancelled_tasks
-                    .lock()
-                    .map_err(|_| "Cancelled tasks mutex was poisoned".to_string())?
-                    .contains(&task_id);
-
-                if was_cancelled {
-                    emit_progress_event(
-                        app_handle,
-                        InferenceProgressEvent {
-                            task_id: task_id.clone(),
-                            status: "cancelled".to_string(),
-                            message: "Task cancelled by user.".to_string(),
-                            total,
-                            completed: index,
-                            progress: if total == 0 {
-                                0
-                            } else {
-                                (((index * 100) / total).min(100)) as u8
-                            },
-                            current_path: Some(input_path.clone()),
-                            output_path: None,
-                        },
-                    );
-
-                    if let Ok(mut cancelled) = cancelled_tasks.lock() {
-                        cancelled.remove(&task_id);
-                    }
-
-                    let _ = backend.restart_backend_process();
-                    return Err("Task cancelled by user.".to_string());
-                }
-
-                let completed = index;
-                let progress = if total == 0 {
-                    0
-                } else {
-                    (((completed * 100) / total).min(100)) as u8
-                };
-
-                emit_progress_event(
-                    app_handle,
-                    InferenceProgressEvent {
-                        task_id,
-                        status: "failed".to_string(),
-                        message: error.clone(),
-                        total,
-                        completed,
-                        progress,
-                        current_path: Some(input_path.clone()),
-                        output_path: None,
-                    },
-                );
-                return Err(error);
-            }
-        }
-    }
-
-    let result_directories = result_directories.into_iter().collect::<Vec<String>>();
-    let ack_message = if result_directories.is_empty() {
-        start_ack_message
-    } else {
-        format!(
-            "{} Results directory: {}",
-            start_ack_message,
-            result_directories.join(", ")
-        )
-    };
+    let result_directories =
+        result_directories.into_iter().collect::<Vec<String>>();
+    let ack_message =
+        finalize_ack_message(&start_ack_message, &result_directories);
 
     emit_progress_event(
         app_handle,
