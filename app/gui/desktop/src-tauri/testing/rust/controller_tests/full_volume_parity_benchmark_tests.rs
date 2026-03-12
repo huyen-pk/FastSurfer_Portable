@@ -88,6 +88,59 @@ struct InferencePerformanceReport {
     memory_note: String,
 }
 
+struct FullVolumeRunContext {
+    repo_root: PathBuf,
+    python_bin: String,
+    input_mgz: PathBuf,
+    fixture_native: PathBuf,
+    run_dir: PathBuf,
+    preprocess_dir: PathBuf,
+    forward_dir: PathBuf,
+    postprocess_dir: PathBuf,
+}
+
+struct InferenceStageOutput {
+    rust_inf_ms: f64,
+    python_inf_ms: f64,
+    rust_pred: PathBuf,
+    python_golden_pred: PathBuf,
+    python_pred_benchmark: PathBuf,
+    run_python_benchmark: bool,
+    inference_metrics: Value,
+    dice_fg: f64,
+    dice_macro: f64,
+    icc_2_1: f64,
+    assd_fg: f64,
+    hd95_fg: f64,
+}
+
+struct PostprocessStageOutput {
+    rust_post_ms: f64,
+    python_post_ms: f64,
+    post_accuracy: Value,
+    post_aseg_ratio: f64,
+    post_brainmask_ratio: f64,
+}
+
+struct InferenceGateMetrics {
+    dice_fg: f64,
+    dice_macro: f64,
+    icc_2_1: f64,
+    assd_fg: f64,
+    hd95_fg: f64,
+}
+
+struct PostprocessCompareArgs<'a> {
+    pred_nii: &'a Path,
+    rust_aseg_raw: &'a Path,
+    rust_mask_raw: &'a Path,
+    shape_xyz: [usize; 3],
+    python_aseg_nii: &'a Path,
+    python_brainmask_nii: &'a Path,
+    rust_aseg_nii: &'a Path,
+    rust_brainmask_nii: &'a Path,
+}
+
 #[derive(Default)]
 struct PreprocessStats {
     count: usize,
@@ -130,7 +183,9 @@ impl PreprocessStats {
                 "max": null,
             });
         }
-        let n = self.count as f64;
+        let n = f64::from(
+            u32::try_from(self.count).expect("count should fit into u32"),
+        );
         let mean = self.sum / n;
         let var = (self.sumsq / n) - (mean * mean);
         let std = if var.is_sign_negative() {
@@ -508,14 +563,7 @@ fn ensure_python_golden_fixture(
 fn postprocess_stage_python_compare(
     python_bin: &str,
     repo_root: &Path,
-    pred_nii: &Path,
-    rust_aseg_raw: &Path,
-    rust_mask_raw: &Path,
-    shape_xyz: [usize; 3],
-    python_aseg_nii: &Path,
-    python_brainmask_nii: &Path,
-    rust_aseg_nii: &Path,
-    rust_brainmask_nii: &Path,
+    args: &PostprocessCompareArgs<'_>,
 ) -> Result<(f64, Value), String> {
     let script = r#"
 import json
@@ -587,16 +635,16 @@ print(json.dumps({
         repo_root,
         script,
         &[
-            pred_nii.to_string_lossy().to_string(),
-            rust_aseg_raw.to_string_lossy().to_string(),
-            rust_mask_raw.to_string_lossy().to_string(),
-            shape_xyz[0].to_string(),
-            shape_xyz[1].to_string(),
-            shape_xyz[2].to_string(),
-            python_aseg_nii.to_string_lossy().to_string(),
-            python_brainmask_nii.to_string_lossy().to_string(),
-            rust_aseg_nii.to_string_lossy().to_string(),
-            rust_brainmask_nii.to_string_lossy().to_string(),
+            args.pred_nii.to_string_lossy().to_string(),
+            args.rust_aseg_raw.to_string_lossy().to_string(),
+            args.rust_mask_raw.to_string_lossy().to_string(),
+            args.shape_xyz[0].to_string(),
+            args.shape_xyz[1].to_string(),
+            args.shape_xyz[2].to_string(),
+            args.python_aseg_nii.to_string_lossy().to_string(),
+            args.python_brainmask_nii.to_string_lossy().to_string(),
+            args.rust_aseg_nii.to_string_lossy().to_string(),
+            args.rust_brainmask_nii.to_string_lossy().to_string(),
         ],
     )?;
 
@@ -629,9 +677,18 @@ fn read_nested_f64(value: &Value, path: &[&str]) -> Option<f64> {
 
 fn prefixed_file_name(src: &Path, prefix: &str, fallback: &str) -> String {
     match src.file_name().and_then(|name| name.to_str()) {
-        Some(name) => format!("{}{}", prefix, name),
+        Some(name) => format!("{prefix}{name}"),
         None => fallback.to_string(),
     }
+}
+
+fn round_label_to_u16(value: f32) -> u16 {
+    value
+        .round()
+        .max(0.0)
+        .to_string()
+        .parse::<u16>()
+        .expect("rounded label value should fit into u16")
 }
 
 fn parity_slices_per_plane() -> usize {
@@ -645,14 +702,493 @@ fn parity_slices_per_plane() -> usize {
 fn parity_run_python_benchmark() -> bool {
     std::env::var("FASTSURFER_PARITY_RUN_PY_BENCH")
         .ok()
-        .map(|value| {
+        .is_none_or(|value| {
             let normalized = value.trim().to_ascii_lowercase();
             !(normalized == "0"
                 || normalized == "false"
                 || normalized == "no"
                 || normalized == "off")
         })
-        .unwrap_or(true)
+}
+
+fn load_inference_metrics(
+    context: &FullVolumeRunContext,
+    rust_pred: &Path,
+    python_golden_pred: &Path,
+) -> Result<Value, String> {
+    let metrics_script = context
+        .repo_root
+        .join("app/gui/desktop/src-tauri/testing/python/parity_metrics.py");
+    let inference_metrics_json =
+        context.forward_dir.join("inference_metrics.json");
+    let status = Command::new(&context.python_bin)
+        .arg(&metrics_script)
+        .arg(rust_pred)
+        .arg(python_golden_pred)
+        .arg(&inference_metrics_json)
+        .current_dir(&context.repo_root)
+        .env(
+            "PYTHONPATH",
+            context.repo_root.to_string_lossy().to_string(),
+        )
+        .status()
+        .map_err(|error| {
+            format!(
+                "failed to run parity_metrics.py for inference stage: {error}"
+            )
+        })?;
+    if !status.success() {
+        return Err("parity_metrics.py failed for inference stage".to_string());
+    }
+
+    serde_json::from_str::<Value>(
+        &fs::read_to_string(&inference_metrics_json).map_err(|error| {
+            format!("failed reading inference metrics json file: {error}")
+        })?,
+    )
+    .map_err(|error| format!("failed parsing inference metrics json: {error}"))
+}
+
+fn extract_inference_gate_metrics(
+    inference_metrics: &Value,
+) -> InferenceGateMetrics {
+    InferenceGateMetrics {
+        dice_fg: read_nested_f64(
+            inference_metrics,
+            &["aggregate", "dice_foreground"],
+        )
+        .unwrap_or(0.0),
+        dice_macro: read_nested_f64(
+            inference_metrics,
+            &["aggregate", "dice_macro"],
+        )
+        .unwrap_or(0.0),
+        icc_2_1: read_nested_f64(
+            inference_metrics,
+            &["aggregate", "icc_2_1_volumes"],
+        )
+        .unwrap_or(0.0),
+        assd_fg: read_nested_f64(
+            inference_metrics,
+            &["aggregate", "assd_foreground"],
+        )
+        .unwrap_or(f64::INFINITY),
+        hd95_fg: read_nested_f64(
+            inference_metrics,
+            &["aggregate", "hd95_foreground"],
+        )
+        .unwrap_or(f64::INFINITY),
+    }
+}
+
+fn assert_inference_gate_metrics(metrics: &InferenceGateMetrics) {
+    assert!(
+        metrics.dice_fg >= MIN_DICE_FOREGROUND,
+        "inference gate failed: dice_foreground {} < {}",
+        metrics.dice_fg,
+        MIN_DICE_FOREGROUND
+    );
+    assert!(
+        metrics.dice_macro >= MIN_DICE_MACRO,
+        "inference gate failed: dice_macro {} < {}",
+        metrics.dice_macro,
+        MIN_DICE_MACRO
+    );
+    assert!(
+        metrics.icc_2_1 >= MIN_ICC_2_1,
+        "inference gate failed: icc_2_1_volumes {} < {}",
+        metrics.icc_2_1,
+        MIN_ICC_2_1
+    );
+    assert!(
+        metrics.assd_fg <= MAX_ASSD_FOREGROUND,
+        "inference gate failed: assd_foreground {} > {}",
+        metrics.assd_fg,
+        MAX_ASSD_FOREGROUND
+    );
+    assert!(
+        metrics.hd95_fg <= MAX_HD95_FOREGROUND,
+        "inference gate failed: hd95_foreground {} > {}",
+        metrics.hd95_fg,
+        MAX_HD95_FOREGROUND
+    );
+}
+
+fn copy_forward_artifacts(
+    context: &FullVolumeRunContext,
+    inference: &InferenceStageOutput,
+) -> Result<(), String> {
+    let rust_pred_copy = context.forward_dir.join(prefixed_file_name(
+        &inference.rust_pred,
+        "rust_forward_",
+        "rust_forward_pred.nii.gz",
+    ));
+    let python_golden_pred_copy = context.forward_dir.join(prefixed_file_name(
+        &inference.python_golden_pred,
+        "python_forward_golden_",
+        "python_forward_golden_pred.nii.gz",
+    ));
+    let python_benchmark_pred_copy =
+        context.forward_dir.join(prefixed_file_name(
+            &inference.python_pred_benchmark,
+            "python_forward_benchmark_",
+            "python_forward_benchmark_pred.nii.gz",
+        ));
+    copy_if_exists(&inference.rust_pred, &rust_pred_copy)?;
+    copy_if_exists(&inference.python_golden_pred, &python_golden_pred_copy)?;
+    copy_if_exists(
+        &inference.python_pred_benchmark,
+        &python_benchmark_pred_copy,
+    )?;
+    Ok(())
+}
+
+fn build_inference_performance(
+    inference: &InferenceStageOutput,
+) -> InferencePerformanceReport {
+    let rust_images_per_min = if inference.rust_inf_ms > 0.0 {
+        60_000.0 / inference.rust_inf_ms
+    } else {
+        0.0
+    };
+    let python_images_per_min = if inference.python_inf_ms > 0.0 {
+        60_000.0 / inference.python_inf_ms
+    } else {
+        0.0
+    };
+    let rust_vs_python_speedup = if inference.python_inf_ms > 0.0 {
+        inference.python_inf_ms / inference.rust_inf_ms.max(1e-9)
+    } else {
+        0.0
+    };
+
+    InferencePerformanceReport {
+        rust: PipelinePerfSample {
+            elapsed_ms: inference.rust_inf_ms,
+            images_per_min: rust_images_per_min,
+            speed_note: "native sparse ONNX pipeline".to_string(),
+        },
+        python: PipelinePerfSample {
+            elapsed_ms: inference.python_inf_ms,
+            images_per_min: python_images_per_min,
+            speed_note: if inference.run_python_benchmark {
+                "python backend runtime pipeline".to_string()
+            } else {
+                "python benchmark skipped (FASTSURFER_PARITY_RUN_PY_BENCH=0)".to_string()
+            },
+        },
+        rust_vs_python_speedup,
+        cpu_note: "cpu utilization and per-process cpu breakdown are not captured by this test yet"
+            .to_string(),
+        memory_note: "peak RSS is not captured by this test yet".to_string(),
+    }
+}
+
+fn setup_full_volume_run_context(
+    repo_root: PathBuf,
+    python_bin: String,
+) -> Result<FullVolumeRunContext, String> {
+    let input_mgz = repo_root
+        .join("app/gui/desktop/src-tauri/testing/data/Subject140/140_orig.mgz");
+    if !input_mgz.exists() {
+        return Err(format!(
+            "missing Subject140 input at '{}'",
+            input_mgz.display()
+        ));
+    }
+
+    let fixture_native = fixture_native_input(&repo_root);
+    if !fixture_native.exists() {
+        if let Some(parent) = fixture_native.parent() {
+            fs::create_dir_all(parent).map_err(|error| {
+                format!(
+                    "failed to create native fixture parent directory: {error}"
+                )
+            })?;
+        }
+        convert_mgz_to_nii_gz(&python_bin, &input_mgz, &fixture_native)?;
+    }
+
+    let reports_root =
+        repo_root.join("app/gui/desktop/src-tauri/testing/rust/results");
+    fs::create_dir_all(&reports_root).map_err(|error| {
+        format!("failed to create parity reports root directory: {error}")
+    })?;
+
+    let run_dir = reports_root.join(format!(
+        "parity_dice_assd_hd95_hdmax_icc_full_volume_subject140_{}",
+        now_unix_millis()
+    ));
+    let preprocess_dir = run_dir.join("preprocess");
+    let forward_dir = run_dir.join("forward_pass");
+    let postprocess_dir = run_dir.join("postprocess");
+
+    fs::create_dir_all(&preprocess_dir).map_err(|error| {
+        format!("failed to create preprocess artifacts directory: {error}")
+    })?;
+    fs::create_dir_all(&forward_dir).map_err(|error| {
+        format!("failed to create forward artifacts directory: {error}")
+    })?;
+    fs::create_dir_all(&postprocess_dir).map_err(|error| {
+        format!("failed to create postprocess artifacts directory: {error}")
+    })?;
+
+    copy_if_exists(&input_mgz, &run_dir.join("input_subject140.mgz"))?;
+    copy_if_exists(
+        &fixture_native,
+        &run_dir.join("input_subject140.native_input.nii.gz"),
+    )?;
+
+    Ok(FullVolumeRunContext {
+        repo_root,
+        python_bin,
+        input_mgz,
+        fixture_native,
+        run_dir,
+        preprocess_dir,
+        forward_dir,
+        postprocess_dir,
+    })
+}
+
+fn run_inference_stage(
+    context: &FullVolumeRunContext,
+) -> Result<InferenceStageOutput, String> {
+    if std::env::var("FASTSURFER_REPO_ROOT").is_err() {
+        return Err("FASTSURFER_REPO_ROOT not set".to_string());
+    }
+
+    let rust_inf_t0 = Instant::now();
+    let rust_result = run_native_inference_with_timeout(
+        &[context.fixture_native.to_string_lossy().to_string()],
+        &[],
+        Duration::from_secs(900),
+    )?;
+    let rust_inf_ms = rust_inf_t0.elapsed().as_secs_f64() * 1000.0;
+
+    let rust_pred = rust_result
+        .results
+        .first()
+        .map(|result| PathBuf::from(&result.output_path))
+        .ok_or_else(|| "rust full-volume returned no results".to_string())?;
+    if !rust_pred.exists() {
+        return Err(format!(
+            "rust pred output not found: {}",
+            rust_pred.display()
+        ));
+    }
+
+    let python_golden_pred = ensure_python_golden_fixture(
+        &context.repo_root,
+        &context.fixture_native,
+    )?;
+    let run_python_benchmark = parity_run_python_benchmark();
+    let (python_inf_ms, python_pred_benchmark) = if run_python_benchmark {
+        inference_stage_python(&context.repo_root, &context.fixture_native)?
+    } else {
+        (0.0, python_golden_pred.clone())
+    };
+
+    let inference_metrics =
+        load_inference_metrics(context, &rust_pred, &python_golden_pred)?;
+    let metrics = extract_inference_gate_metrics(&inference_metrics);
+    assert_inference_gate_metrics(&metrics);
+
+    Ok(InferenceStageOutput {
+        rust_inf_ms,
+        python_inf_ms,
+        rust_pred,
+        python_golden_pred,
+        python_pred_benchmark,
+        run_python_benchmark,
+        inference_metrics,
+        dice_fg: metrics.dice_fg,
+        dice_macro: metrics.dice_macro,
+        icc_2_1: metrics.icc_2_1,
+        assd_fg: metrics.assd_fg,
+        hd95_fg: metrics.hd95_fg,
+    })
+}
+
+fn run_postprocess_stage(
+    context: &FullVolumeRunContext,
+    post_input: &Path,
+) -> Result<PostprocessStageOutput, String> {
+    let post_volume = load_input_volume(&post_input.to_string_lossy())?;
+    let post_shape = post_volume.shape_xyz;
+    let post_labels = post_volume
+        .data_xyz
+        .iter()
+        .map(|value| round_label_to_u16(*value))
+        .collect::<Vec<u16>>();
+
+    let post_t0 = Instant::now();
+    let mut rust_aseg = derive_aseg_from_pred(&post_labels);
+    let rust_brainmask = derive_brainmask_from_pred(&post_labels, post_shape);
+    mask_aseg_with_brainmask(&mut rust_aseg, &rust_brainmask);
+    flip_wm_islands(&mut rust_aseg, post_shape);
+    let rust_post_ms = post_t0.elapsed().as_secs_f64() * 1000.0;
+
+    let rust_aseg_raw = context.postprocess_dir.join("rust_post_aseg.raw");
+    let mut aseg_file = fs::File::create(&rust_aseg_raw).map_err(|error| {
+        format!("failed to create rust_post_aseg.raw: {error}")
+    })?;
+    for value in &rust_aseg {
+        aseg_file.write_all(&value.to_le_bytes()).map_err(|error| {
+            format!("failed writing rust_post_aseg.raw: {error}")
+        })?;
+    }
+    let rust_brainmask_raw =
+        context.postprocess_dir.join("rust_post_brainmask.raw");
+    fs::write(&rust_brainmask_raw, &rust_brainmask).map_err(|error| {
+        format!("failed writing rust_post_brainmask.raw: {error}")
+    })?;
+
+    let compare_args = PostprocessCompareArgs {
+        pred_nii: post_input,
+        rust_aseg_raw: &rust_aseg_raw,
+        rust_mask_raw: &rust_brainmask_raw,
+        shape_xyz: post_shape,
+        python_aseg_nii: &context
+            .postprocess_dir
+            .join("python_post_aseg.nii.gz"),
+        python_brainmask_nii: &context
+            .postprocess_dir
+            .join("python_post_brainmask.nii.gz"),
+        rust_aseg_nii: &context.postprocess_dir.join("rust_post_aseg.nii.gz"),
+        rust_brainmask_nii: &context
+            .postprocess_dir
+            .join("rust_post_brainmask.nii.gz"),
+    };
+    let (python_post_ms, post_accuracy) = postprocess_stage_python_compare(
+        &context.python_bin,
+        &context.repo_root,
+        &compare_args,
+    )?;
+
+    let post_aseg_ratio = post_accuracy["aseg_mismatch_ratio"]
+        .as_f64()
+        .ok_or_else(|| {
+            "post accuracy missing aseg_mismatch_ratio".to_string()
+        })?;
+    let post_brainmask_ratio = post_accuracy["brainmask_mismatch_ratio"]
+        .as_f64()
+        .ok_or_else(|| {
+            "post accuracy missing brainmask_mismatch_ratio".to_string()
+        })?;
+
+    assert!(
+        post_aseg_ratio <= MAX_POST_ASEG_MISMATCH_RATIO,
+        "postprocess gate failed: aseg_mismatch_ratio {post_aseg_ratio} > {MAX_POST_ASEG_MISMATCH_RATIO}"
+    );
+    assert!(
+        post_brainmask_ratio <= MAX_POST_BRAINMASK_MISMATCH_RATIO,
+        "postprocess gate failed: brainmask_mismatch_ratio {post_brainmask_ratio} > {MAX_POST_BRAINMASK_MISMATCH_RATIO}"
+    );
+
+    Ok(PostprocessStageOutput {
+        rust_post_ms,
+        python_post_ms,
+        post_accuracy,
+        post_aseg_ratio,
+        post_brainmask_ratio,
+    })
+}
+
+fn write_full_volume_report(
+    context: &FullVolumeRunContext,
+    rust_pre_ms: f64,
+    rust_pre_stats: &Value,
+    python_pre_ms: f64,
+    python_pre_stats: &Value,
+    inference: &InferenceStageOutput,
+    postprocess: &PostprocessStageOutput,
+) -> Result<PathBuf, String> {
+    copy_forward_artifacts(context, inference)?;
+    let inference_performance = build_inference_performance(inference);
+
+    let report = FullVolumeParityReport {
+        created_at_unix: now_unix(),
+        case_id: "Subject140".to_string(),
+        input_mgz: context.input_mgz.to_string_lossy().to_string(),
+        input_native_nii: context.fixture_native.to_string_lossy().to_string(),
+        rust_pred: inference.rust_pred.to_string_lossy().to_string(),
+        python_pred: inference.python_golden_pred.to_string_lossy().to_string(),
+        preprocess: StageReport {
+            timing: StageTiming {
+                rust_ms: rust_pre_ms,
+                python_ms: python_pre_ms,
+            },
+            accuracy: StageAccuracy {
+                summary: serde_json::json!({
+                    "rust": rust_pre_stats,
+                    "python": python_pre_stats,
+                }),
+            },
+        },
+        inference: StageReport {
+            timing: StageTiming {
+                rust_ms: inference.rust_inf_ms,
+                python_ms: inference.python_inf_ms,
+            },
+            accuracy: StageAccuracy {
+                summary: serde_json::json!({
+                    "comparison_mode": "rust_prediction_vs_python_golden_fixture",
+                    "python_golden_pred": inference.python_golden_pred,
+                    "python_benchmark_pred": inference.python_pred_benchmark,
+                    "metrics": inference.inference_metrics,
+                    "performance": inference_performance,
+                    "gates": {
+                        "dice_foreground_min": MIN_DICE_FOREGROUND,
+                        "dice_macro_min": MIN_DICE_MACRO,
+                        "icc_2_1_min": MIN_ICC_2_1,
+                        "assd_foreground_max": MAX_ASSD_FOREGROUND,
+                        "hd95_foreground_max": MAX_HD95_FOREGROUND,
+                        "observed": {
+                            "dice_foreground": inference.dice_fg,
+                            "dice_macro": inference.dice_macro,
+                            "icc_2_1_volumes": inference.icc_2_1,
+                            "assd_foreground": inference.assd_fg,
+                            "hd95_foreground": inference.hd95_fg,
+                        },
+                    }
+                }),
+            },
+        },
+        postprocess: StageReport {
+            timing: StageTiming {
+                rust_ms: postprocess.rust_post_ms,
+                python_ms: postprocess.python_post_ms,
+            },
+            accuracy: StageAccuracy {
+                summary: serde_json::json!({
+                    "metrics": postprocess.post_accuracy,
+                    "gates": {
+                        "aseg_mismatch_ratio_max": MAX_POST_ASEG_MISMATCH_RATIO,
+                        "brainmask_mismatch_ratio_max": MAX_POST_BRAINMASK_MISMATCH_RATIO,
+                        "observed": {
+                            "aseg_mismatch_ratio": postprocess.post_aseg_ratio,
+                            "brainmask_mismatch_ratio": postprocess.post_brainmask_ratio,
+                        },
+                    }
+                }),
+            },
+        },
+        artifacts_dir: context.run_dir.to_string_lossy().to_string(),
+    };
+
+    let report_path = context.run_dir.join("full_volume_parity_report.json");
+    fs::write(
+        &report_path,
+        serde_json::to_string_pretty(&report).map_err(|error| {
+            format!("failed to serialize full volume parity report: {error}")
+        })?,
+    )
+    .map_err(|error| {
+        format!("failed writing full volume parity report json: {error}")
+    })?;
+
+    Ok(report_path)
 }
 
 #[test]
@@ -680,386 +1216,52 @@ fn parity_dice_assd_hd95_hdmax_icc_full_volume_pipeline_should_generate_stage_be
         return;
     }
 
-    let input_mgz = repo_root
-        .join("app/gui/desktop/src-tauri/testing/data/Subject140/140_orig.mgz");
-    if !input_mgz.exists() {
-        eprintln!(
-            "missing Subject140 input at '{}'; skipping",
-            input_mgz.display()
-        );
-        return;
-    }
-
-    let fixture_native = fixture_native_input(&repo_root);
-    if !fixture_native.exists() {
-        if let Some(parent) = fixture_native.parent() {
-            fs::create_dir_all(parent)
-                .expect("failed to create native fixture parent directory");
+    let context = match setup_full_volume_run_context(repo_root, python_bin) {
+        Ok(context) => context,
+        Err(error) => {
+            eprintln!("{error}; skipping");
+            return;
         }
-        convert_mgz_to_nii_gz(&python_bin, &input_mgz, &fixture_native)
-            .expect("failed to convert mgz to native input nii for benchmark");
-    }
+    };
 
-    let reports_root =
-        repo_root.join("app/gui/desktop/src-tauri/testing/rust/results");
-    fs::create_dir_all(&reports_root)
-        .expect("failed to create parity reports root directory");
-
-    let run_dir = reports_root.join(format!(
-        "parity_dice_assd_hd95_hdmax_icc_full_volume_subject140_{}",
-        now_unix_millis()
-    ));
-    fs::create_dir_all(&run_dir)
-        .expect("failed to create parity run directory");
-
-    let preprocess_dir = run_dir.join("preprocess");
-    let forward_dir = run_dir.join("forward_pass");
-    let postprocess_dir = run_dir.join("postprocess");
-    fs::create_dir_all(&preprocess_dir)
-        .expect("failed to create preprocess artifacts directory");
-    fs::create_dir_all(&forward_dir)
-        .expect("failed to create forward artifacts directory");
-    fs::create_dir_all(&postprocess_dir)
-        .expect("failed to create postprocess artifacts directory");
-
-    let input_mgz_copy = run_dir.join("input_subject140.mgz");
-    let input_native_copy =
-        run_dir.join("input_subject140.native_input.nii.gz");
-    copy_if_exists(&input_mgz, &input_mgz_copy)
-        .expect("failed copying input mgz artifact");
-    copy_if_exists(&fixture_native, &input_native_copy)
-        .expect("failed copying input native nii artifact");
-
-    let (rust_pre_ms, rust_pre_stats) =
-        preprocess_stage_rust_full_volume(&fixture_native, &preprocess_dir)
-            .expect("rust preprocess stage failed");
+    let (rust_pre_ms, rust_pre_stats) = preprocess_stage_rust_full_volume(
+        &context.fixture_native,
+        &context.preprocess_dir,
+    )
+    .expect("rust preprocess stage failed");
     let (python_pre_ms, python_pre_stats) =
         preprocess_stage_python_full_volume(
-            &python_bin,
-            &repo_root,
-            &fixture_native,
-            &preprocess_dir,
+            &context.python_bin,
+            &context.repo_root,
+            &context.fixture_native,
+            &context.preprocess_dir,
         )
         .expect("python preprocess stage failed");
 
     let _slices_per_plane = parity_slices_per_plane();
+    let inference = match run_inference_stage(&context) {
+        Ok(inference) => inference,
+        Err(error) if error == "FASTSURFER_REPO_ROOT not set" => {
+            eprintln!("Skipping full-volume parity benchmark: {error}");
+            return;
+        }
+        Err(error) => panic!("{error}"),
+    };
 
-    // Environment must be set externally for this test.
-    if std::env::var("FASTSURFER_REPO_ROOT").is_err() {
-        eprintln!(
-            "Skipping full-volume parity benchmark: FASTSURFER_REPO_ROOT not set"
-        );
-        return;
-    }
+    let postprocess =
+        run_postprocess_stage(&context, &inference.python_golden_pred)
+            .expect("python postprocess compare failed");
 
-    let rust_inf_t0 = Instant::now();
-    let rust_result = run_native_inference_with_timeout(
-        &[fixture_native.to_string_lossy().to_string()],
-        &[],
-        Duration::from_secs(900),
+    let report_path = write_full_volume_report(
+        &context,
+        rust_pre_ms,
+        &rust_pre_stats,
+        python_pre_ms,
+        &python_pre_stats,
+        &inference,
+        &postprocess,
     )
-    .expect("rust full-volume inference failed");
-    let rust_inf_ms = rust_inf_t0.elapsed().as_secs_f64() * 1000.0;
-
-    assert!(
-        !rust_result.results.is_empty(),
-        "rust full-volume returned no results"
-    );
-    let rust_pred = PathBuf::from(&rust_result.results[0].output_path);
-    assert!(
-        rust_pred.exists(),
-        "rust pred output not found: {}",
-        rust_pred.display()
-    );
-
-    let python_golden_pred =
-        ensure_python_golden_fixture(&repo_root, &fixture_native)
-            .expect("failed to ensure python golden prediction fixture");
-
-    let run_python_benchmark = parity_run_python_benchmark();
-    let (python_inf_ms, python_pred_benchmark) = if run_python_benchmark {
-        inference_stage_python(&repo_root, &fixture_native)
-            .expect("python inference benchmark stage failed")
-    } else {
-        (0.0, python_golden_pred.clone())
-    };
-
-    let metrics_script = repo_root
-        .join("app/gui/desktop/src-tauri/testing/python/parity_metrics.py");
-    let inference_metrics_json = forward_dir.join("inference_metrics.json");
-    let status = Command::new(&python_bin)
-        .arg(&metrics_script)
-        .arg(&rust_pred)
-        .arg(&python_golden_pred)
-        .arg(&inference_metrics_json)
-        .current_dir(&repo_root)
-        .env("PYTHONPATH", repo_root.to_string_lossy().to_string())
-        .status()
-        .expect("failed to run parity_metrics.py for inference stage");
-    assert!(
-        status.success(),
-        "parity_metrics.py failed for inference stage"
-    );
-
-    let inference_metrics = serde_json::from_str::<Value>(
-        &fs::read_to_string(&inference_metrics_json)
-            .expect("failed reading inference metrics json file"),
-    )
-    .expect("failed parsing inference metrics json");
-
-    let dice_fg =
-        read_nested_f64(&inference_metrics, &["aggregate", "dice_foreground"])
-            .unwrap_or(0.0);
-    let dice_macro =
-        read_nested_f64(&inference_metrics, &["aggregate", "dice_macro"])
-            .unwrap_or(0.0);
-    let icc_2_1 =
-        read_nested_f64(&inference_metrics, &["aggregate", "icc_2_1_volumes"])
-            .unwrap_or(0.0);
-    let assd_fg =
-        read_nested_f64(&inference_metrics, &["aggregate", "assd_foreground"])
-            .unwrap_or(f64::INFINITY);
-    let hd95_fg =
-        read_nested_f64(&inference_metrics, &["aggregate", "hd95_foreground"])
-            .unwrap_or(f64::INFINITY);
-
-    assert!(
-        dice_fg >= MIN_DICE_FOREGROUND,
-        "inference gate failed: dice_foreground {} < {}",
-        dice_fg,
-        MIN_DICE_FOREGROUND
-    );
-    assert!(
-        dice_macro >= MIN_DICE_MACRO,
-        "inference gate failed: dice_macro {} < {}",
-        dice_macro,
-        MIN_DICE_MACRO
-    );
-    assert!(
-        icc_2_1 >= MIN_ICC_2_1,
-        "inference gate failed: icc_2_1_volumes {} < {}",
-        icc_2_1,
-        MIN_ICC_2_1
-    );
-    assert!(
-        assd_fg <= MAX_ASSD_FOREGROUND,
-        "inference gate failed: assd_foreground {} > {}",
-        assd_fg,
-        MAX_ASSD_FOREGROUND
-    );
-    assert!(
-        hd95_fg <= MAX_HD95_FOREGROUND,
-        "inference gate failed: hd95_foreground {} > {}",
-        hd95_fg,
-        MAX_HD95_FOREGROUND
-    );
-
-    let post_input = python_golden_pred.clone();
-
-    let post_volume = load_input_volume(&post_input.to_string_lossy())
-        .expect("failed loading postprocess input volume");
-    let post_shape = post_volume.shape_xyz;
-    let post_labels = post_volume
-        .data_xyz
-        .iter()
-        .map(|v| v.round().max(0.0) as u16)
-        .collect::<Vec<u16>>();
-
-    let post_t0 = Instant::now();
-    let mut rust_aseg = derive_aseg_from_pred(&post_labels);
-    let rust_brainmask = derive_brainmask_from_pred(&post_labels, post_shape);
-    mask_aseg_with_brainmask(&mut rust_aseg, &rust_brainmask);
-    flip_wm_islands(&mut rust_aseg, post_shape);
-    let rust_post_ms = post_t0.elapsed().as_secs_f64() * 1000.0;
-
-    let rust_aseg_raw = postprocess_dir.join("rust_post_aseg.raw");
-    let mut aseg_file = fs::File::create(&rust_aseg_raw)
-        .expect("failed to create rust_post_aseg.raw");
-    for value in &rust_aseg {
-        aseg_file
-            .write_all(&value.to_le_bytes())
-            .expect("failed writing rust_post_aseg.raw");
-    }
-    let rust_brainmask_raw = postprocess_dir.join("rust_post_brainmask.raw");
-    fs::write(&rust_brainmask_raw, &rust_brainmask)
-        .expect("failed writing rust_post_brainmask.raw");
-
-    let python_aseg_nii = postprocess_dir.join("python_post_aseg.nii.gz");
-    let python_brainmask_nii =
-        postprocess_dir.join("python_post_brainmask.nii.gz");
-    let rust_aseg_nii = postprocess_dir.join("rust_post_aseg.nii.gz");
-    let rust_brainmask_nii = postprocess_dir.join("rust_post_brainmask.nii.gz");
-
-    let (python_post_ms, post_accuracy) = postprocess_stage_python_compare(
-        &python_bin,
-        &repo_root,
-        &post_input,
-        &rust_aseg_raw,
-        &rust_brainmask_raw,
-        post_shape,
-        &python_aseg_nii,
-        &python_brainmask_nii,
-        &rust_aseg_nii,
-        &rust_brainmask_nii,
-    )
-    .expect("python postprocess compare failed");
-
-    let post_aseg_ratio = post_accuracy["aseg_mismatch_ratio"]
-        .as_f64()
-        .expect("post accuracy missing aseg_mismatch_ratio");
-    let post_brainmask_ratio = post_accuracy["brainmask_mismatch_ratio"]
-        .as_f64()
-        .expect("post accuracy missing brainmask_mismatch_ratio");
-
-    assert!(
-        post_aseg_ratio <= MAX_POST_ASEG_MISMATCH_RATIO,
-        "postprocess gate failed: aseg_mismatch_ratio {} > {}",
-        post_aseg_ratio,
-        MAX_POST_ASEG_MISMATCH_RATIO
-    );
-    assert!(
-        post_brainmask_ratio <= MAX_POST_BRAINMASK_MISMATCH_RATIO,
-        "postprocess gate failed: brainmask_mismatch_ratio {} > {}",
-        post_brainmask_ratio,
-        MAX_POST_BRAINMASK_MISMATCH_RATIO
-    );
-
-    let rust_pred_copy = forward_dir.join(prefixed_file_name(
-        &rust_pred,
-        "rust_forward_",
-        "rust_forward_pred.nii.gz",
-    ));
-    let python_golden_pred_copy = forward_dir.join(prefixed_file_name(
-        &python_golden_pred,
-        "python_forward_golden_",
-        "python_forward_golden_pred.nii.gz",
-    ));
-    let python_benchmark_pred_copy = forward_dir.join(prefixed_file_name(
-        &python_pred_benchmark,
-        "python_forward_benchmark_",
-        "python_forward_benchmark_pred.nii.gz",
-    ));
-    copy_if_exists(&rust_pred, &rust_pred_copy)
-        .expect("failed copying rust pred artifact");
-    copy_if_exists(&python_golden_pred, &python_golden_pred_copy)
-        .expect("failed copying python golden pred artifact");
-    copy_if_exists(&python_pred_benchmark, &python_benchmark_pred_copy)
-        .expect("failed copying python benchmark pred artifact");
-
-    let rust_images_per_min = if rust_inf_ms > 0.0 {
-        60_000.0 / rust_inf_ms
-    } else {
-        0.0
-    };
-    let python_images_per_min = if python_inf_ms > 0.0 {
-        60_000.0 / python_inf_ms
-    } else {
-        0.0
-    };
-    let rust_vs_python_speedup = if python_inf_ms > 0.0 {
-        python_inf_ms / rust_inf_ms.max(1e-9)
-    } else {
-        0.0
-    };
-
-    let inference_performance = InferencePerformanceReport {
-        rust: PipelinePerfSample {
-            elapsed_ms: rust_inf_ms,
-            images_per_min: rust_images_per_min,
-            speed_note: "native sparse ONNX pipeline".to_string(),
-        },
-        python: PipelinePerfSample {
-            elapsed_ms: python_inf_ms,
-            images_per_min: python_images_per_min,
-            speed_note: if run_python_benchmark {
-                "python backend runtime pipeline".to_string()
-            } else {
-                "python benchmark skipped (FASTSURFER_PARITY_RUN_PY_BENCH=0)".to_string()
-            },
-        },
-        rust_vs_python_speedup,
-        cpu_note: "cpu utilization and per-process cpu breakdown are not captured by this test yet"
-            .to_string(),
-        memory_note: "peak RSS is not captured by this test yet".to_string(),
-    };
-
-    let report = FullVolumeParityReport {
-        created_at_unix: now_unix(),
-        case_id: "Subject140".to_string(),
-        input_mgz: input_mgz.to_string_lossy().to_string(),
-        input_native_nii: fixture_native.to_string_lossy().to_string(),
-        rust_pred: rust_pred.to_string_lossy().to_string(),
-        python_pred: python_golden_pred.to_string_lossy().to_string(),
-        preprocess: StageReport {
-            timing: StageTiming {
-                rust_ms: rust_pre_ms,
-                python_ms: python_pre_ms,
-            },
-            accuracy: StageAccuracy {
-                summary: serde_json::json!({
-                    "rust": rust_pre_stats,
-                    "python": python_pre_stats,
-                }),
-            },
-        },
-        inference: StageReport {
-            timing: StageTiming {
-                rust_ms: rust_inf_ms,
-                python_ms: python_inf_ms,
-            },
-            accuracy: StageAccuracy {
-                summary: serde_json::json!({
-                    "comparison_mode": "rust_prediction_vs_python_golden_fixture",
-                    "python_golden_pred": python_golden_pred,
-                    "python_benchmark_pred": python_pred_benchmark,
-                    "metrics": inference_metrics,
-                    "performance": inference_performance,
-                    "gates": {
-                        "dice_foreground_min": MIN_DICE_FOREGROUND,
-                        "dice_macro_min": MIN_DICE_MACRO,
-                        "icc_2_1_min": MIN_ICC_2_1,
-                        "assd_foreground_max": MAX_ASSD_FOREGROUND,
-                        "hd95_foreground_max": MAX_HD95_FOREGROUND,
-                        "observed": {
-                            "dice_foreground": dice_fg,
-                            "dice_macro": dice_macro,
-                            "icc_2_1_volumes": icc_2_1,
-                            "assd_foreground": assd_fg,
-                            "hd95_foreground": hd95_fg,
-                        },
-                    }
-                }),
-            },
-        },
-        postprocess: StageReport {
-            timing: StageTiming {
-                rust_ms: rust_post_ms,
-                python_ms: python_post_ms,
-            },
-            accuracy: StageAccuracy {
-                summary: serde_json::json!({
-                    "metrics": post_accuracy,
-                    "gates": {
-                        "aseg_mismatch_ratio_max": MAX_POST_ASEG_MISMATCH_RATIO,
-                        "brainmask_mismatch_ratio_max": MAX_POST_BRAINMASK_MISMATCH_RATIO,
-                        "observed": {
-                            "aseg_mismatch_ratio": post_aseg_ratio,
-                            "brainmask_mismatch_ratio": post_brainmask_ratio,
-                        },
-                    }
-                }),
-            },
-        },
-        artifacts_dir: run_dir.to_string_lossy().to_string(),
-    };
-
-    let report_path = run_dir.join("full_volume_parity_report.json");
-    fs::write(
-        &report_path,
-        serde_json::to_string_pretty(&report)
-            .expect("failed to serialize full volume parity report"),
-    )
-    .expect("failed writing full volume parity report json");
+    .expect("failed to write full volume parity report");
 
     eprintln!("[parity][full-volume] report: {}", report_path.display());
 }

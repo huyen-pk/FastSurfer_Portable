@@ -10,7 +10,7 @@ use std::time::Duration;
 use std::time::Instant;
 
 #[derive(Clone)]
-pub(crate) struct OnnxModelRegistry {
+pub struct OnnxModelRegistry {
     pub axial_model_path: String,
     pub coronal_model_path: String,
     pub sagittal_model_path: String,
@@ -18,7 +18,7 @@ pub(crate) struct OnnxModelRegistry {
 }
 
 #[derive(Clone)]
-pub(crate) struct NativeOnnxSessions {
+pub struct NativeOnnxSessions {
     pub axial: PlaneSession,
     pub coronal: PlaneSession,
     pub sagittal: PlaneSession,
@@ -26,7 +26,7 @@ pub(crate) struct NativeOnnxSessions {
 }
 
 #[derive(Clone)]
-pub(crate) struct PlaneSession {
+pub struct PlaneSession {
     pub model: Arc<onnx::ModelProto>,
     pub model_path: String,
     pub input_name: String,
@@ -37,7 +37,7 @@ pub(crate) struct PlaneSession {
     pub output_shapes: Vec<Option<Vec<usize>>>,
 }
 
-pub(crate) struct PlaneRunResult {
+pub struct PlaneRunResult {
     pub logits: Vec<f32>,
     pub shape_chw: [usize; 3],
     pub output_shapes: Vec<Vec<usize>>,
@@ -140,7 +140,12 @@ impl OnnxModelRegistry {
 }
 
 impl NativeOnnxSessions {
-    pub(crate) fn load_default() -> Result<Self, String> {
+    /// Load the default axial, coronal, and sagittal ONNX sessions.
+    ///
+    /// # Errors
+    /// Returns an error if the model registry cannot be discovered or any
+    /// model fails to load.
+    pub fn load_default() -> Result<Self, String> {
         apply_native_cpu_thread_override();
         let trace_timing = native_trace_timing_enabled();
         let t0 = Instant::now();
@@ -208,7 +213,11 @@ impl NativeOnnxSessions {
         })
     }
 
-    pub(crate) fn run_dummy_probe(&self) -> Result<Vec<String>, String> {
+    /// Execute a lightweight probe run across all loaded plane sessions.
+    ///
+    /// # Errors
+    /// Returns an error if any session cannot complete its dummy probe.
+    pub fn run_dummy_probe(&self) -> Result<Vec<String>, String> {
         Ok(vec![
             self.axial.run_dummy_probe("axial")?,
             self.coronal.run_dummy_probe("coronal")?,
@@ -257,30 +266,17 @@ impl PlaneSession {
         ))
     }
 
-    pub(crate) fn run(
+    fn build_inputs(
         &self,
         input_shape: &[usize],
         input_data: &[f32],
         scale_factor: [f32; 2],
         plane: &str,
-    ) -> Result<PlaneRunResult, String> {
-        let trace_timing = native_trace_timing_enabled();
-        let run_started = Instant::now();
-        let expected_len = input_shape.iter().product::<usize>();
-        if expected_len != input_data.len() {
-            return Err(format!(
-                "{plane}: input tensor length mismatch, got {}, expected {} for shape {:?}",
-                input_data.len(),
-                expected_len,
-                input_shape
-            ));
-        }
-
-        let input =
-            Tensor::from_vec(input_data.to_vec(), input_shape, &Device::Cpu).map_err(|error| {
+    ) -> Result<HashMap<String, Tensor>, String> {
+        let input = Tensor::from_vec(input_data.to_vec(), input_shape, &Device::Cpu)
+            .map_err(|error| {
                 format!(
-                    "{plane}: failed to create input tensor for shape {:?}: {error}",
-                    input_shape
+                    "{plane}: failed to create input tensor for shape {input_shape:?}: {error}"
                 )
             })?;
 
@@ -297,22 +293,29 @@ impl PlaneSession {
                 let aux_shape = self
                     .required_input_shapes
                     .get(required_name)
-                    .and_then(|shape| shape.clone());
+                    .cloned()
+                    .flatten();
 
                 let scale_values = vec![scale_factor[0], scale_factor[1]];
                 let tensor = match aux_shape {
-                    Some(shape) if shape.iter().product::<usize>() == scale_values.len() => {
-                        Tensor::from_vec(scale_values, shape, &Device::Cpu).map_err(|error| {
-                            format!(
-                                "{plane}: failed to create auxiliary input '{required_name}' tensor: {error}"
-                            )
-                        })?
+                    Some(shape)
+                        if shape.iter().product::<usize>() == scale_values.len() =>
+                    {
+                        Tensor::from_vec(scale_values, shape, &Device::Cpu).map_err(
+                            |error| {
+                                format!(
+                                    "{plane}: failed to create auxiliary input '{required_name}' tensor: {error}"
+                                )
+                            },
+                        )?
                     }
-                    _ => Tensor::from_vec(scale_values, &[2], &Device::Cpu).map_err(|error| {
-                        format!(
-                            "{plane}: failed to create fallback auxiliary input '{required_name}' tensor: {error}"
-                        )
-                    })?,
+                    _ => Tensor::from_vec(scale_values, &[2], &Device::Cpu).map_err(
+                        |error| {
+                            format!(
+                                "{plane}: failed to create fallback auxiliary input '{required_name}' tensor: {error}"
+                            )
+                        },
+                    )?,
                 };
                 inputs.insert(required_name.clone(), tensor);
                 continue;
@@ -324,12 +327,23 @@ impl PlaneSession {
             ));
         }
 
+        Ok(inputs)
+    }
+
+    fn run_model(
+        &self,
+        inputs: HashMap<String, Tensor>,
+        input_shape: &[usize],
+        plane: &str,
+        trace_timing: bool,
+        run_started: Instant,
+    ) -> Result<HashMap<String, Tensor>, String> {
         if trace_timing {
             eprintln!(
-                "[trace][native-onnx] simple_eval start plane={} input_shape={:?}",
-                plane, input_shape
+                "[trace][native-onnx] simple_eval start plane={plane} input_shape={input_shape:?}"
             );
         }
+
         let eval_started = Instant::now();
         let outputs = if let Some(timeout_secs) = native_plane_timeout_secs() {
             let (tx, rx) = mpsc::channel();
@@ -346,8 +360,7 @@ impl PlaneSession {
                 Ok(result) => result?,
                 Err(mpsc::RecvTimeoutError::Timeout) => {
                     return Err(format!(
-                        "{plane}: ONNX forward pass timed out after {}s",
-                        timeout_secs
+                        "{plane}: ONNX forward pass timed out after {timeout_secs}s"
                     ));
                 }
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
@@ -361,6 +374,7 @@ impl PlaneSession {
                 format!("{plane}: ONNX forward pass failed: {error}")
             })?
         };
+
         if trace_timing {
             eprintln!(
                 "[trace][native-onnx] simple_eval end plane={} eval_ms={} total_ms={}",
@@ -370,6 +384,14 @@ impl PlaneSession {
             );
         }
 
+        Ok(outputs)
+    }
+
+    fn build_run_result(
+        &self,
+        outputs: &HashMap<String, Tensor>,
+        plane: &str,
+    ) -> Result<PlaneRunResult, String> {
         let available = outputs
             .keys()
             .map(ToString::to_string)
@@ -387,18 +409,7 @@ impl PlaneSession {
         })?;
 
         let shape = primary.dims().to_vec();
-        if shape.len() != 4 {
-            return Err(format!(
-                "{plane}: output shape must be rank-4 [N,C,H,W], got {:?}",
-                shape
-            ));
-        }
-        if shape[0] != 1 {
-            return Err(format!(
-                "{plane}: output batch dimension must be 1, got {}",
-                shape[0]
-            ));
-        }
+        validate_rank4_shape(&shape, plane)?;
 
         let output_shapes = self
             .output_names
@@ -431,6 +442,59 @@ impl PlaneSession {
             output_shapes,
         })
     }
+
+    /// Run a single plane session with the provided tensor input.
+    ///
+    /// # Errors
+    /// Returns an error if the provided tensor shape is invalid or the ONNX
+    /// execution/output conversion fails.
+    pub fn run(
+        &self,
+        input_shape: &[usize],
+        input_data: &[f32],
+        scale_factor: [f32; 2],
+        plane: &str,
+    ) -> Result<PlaneRunResult, String> {
+        let trace_timing = native_trace_timing_enabled();
+        let run_started = Instant::now();
+        let expected_len = input_shape.iter().product::<usize>();
+        if expected_len != input_data.len() {
+            return Err(format!(
+                "{plane}: input tensor length mismatch, got {}, expected {} for shape {:?}",
+                input_data.len(),
+                expected_len,
+                input_shape
+            ));
+        }
+
+        let inputs =
+            self.build_inputs(input_shape, input_data, scale_factor, plane)?;
+        let outputs = self.run_model(
+            inputs,
+            input_shape,
+            plane,
+            trace_timing,
+            run_started,
+        )?;
+        self.build_run_result(&outputs, plane)
+    }
+}
+
+fn validate_rank4_shape(shape: &[usize], plane: &str) -> Result<(), String> {
+    if shape.len() != 4 {
+        return Err(format!(
+            "{plane}: output shape must be rank-4 [N,C,H,W], got {shape:?}"
+        ));
+    }
+
+    if shape[0] != 1 {
+        return Err(format!(
+            "{plane}: output batch dimension must be 1, got {}",
+            shape[0]
+        ));
+    }
+
+    Ok(())
 }
 
 fn load_runnable_model(
@@ -477,9 +541,8 @@ fn load_runnable_model(
         .find(|name| {
             required_input_shapes
                 .get(*name)
-                .and_then(|shape| shape.as_ref())
-                .map(|shape| shape.len() == 4)
-                .unwrap_or(false)
+                .and_then(Option::as_ref)
+                .is_some_and(|shape| shape.len() == 4)
         })
         .cloned()
         .or_else(|| required_input_names.first().cloned())
@@ -564,7 +627,7 @@ fn hydrate_external_initializers(
                             "{plane}: invalid external_data offset '{}' for tensor '{}': {error}",
                             entry.value, tensor.name
                         )
-                    })?
+                    })?;
                 }
                 "length" => {
                     length = Some(entry.value.parse::<u64>().map_err(|error| {
@@ -572,7 +635,7 @@ fn hydrate_external_initializers(
                             "{plane}: invalid external_data length '{}' for tensor '{}': {error}",
                             entry.value, tensor.name
                         )
-                    })?)
+                    })?);
                 }
                 _ => {}
             }
@@ -606,7 +669,13 @@ fn hydrate_external_initializers(
         let mut bytes = Vec::<u8>::new();
         match length {
             Some(len) => {
-                bytes.resize(len as usize, 0u8);
+                let len = usize::try_from(len).map_err(|error| {
+                    format!(
+                        "{plane}: external_data length {len} does not fit usize for tensor '{}': {error}",
+                        tensor.name
+                    )
+                })?;
+                bytes.resize(len, 0u8);
                 file.read_exact(&mut bytes).map_err(|error| {
                     format!(
                         "{plane}: failed reading {} bytes from '{}' for tensor '{}': {error}",
@@ -682,10 +751,9 @@ fn rewrite_scalar_prelu_nodes(model: &mut onnx::ModelProto) {
 }
 
 fn scalar_f32_tensor_value(tensor: &onnx::TensorProto) -> Option<f32> {
-    let element_count = tensor
-        .dims
-        .iter()
-        .try_fold(1usize, |acc, dim| acc.checked_mul((*dim).max(0) as usize))?;
+    let element_count = tensor.dims.iter().try_fold(1usize, |acc, dim| {
+        acc.checked_mul(usize::try_from(*dim).unwrap_or(0))
+    })?;
     if element_count != 1 {
         return None;
     }
@@ -700,15 +768,15 @@ fn scalar_f32_tensor_value(tensor: &onnx::TensorProto) -> Option<f32> {
     }
 
     if let Some(value) = tensor.double_data.first() {
-        return Some(*value as f32);
+        return parse_scalar_f32(value);
     }
 
     if let Some(value) = tensor.int32_data.first() {
-        return Some(*value as f32);
+        return parse_scalar_f32(value);
     }
 
     if let Some(value) = tensor.int64_data.first() {
-        return Some(*value as f32);
+        return parse_scalar_f32(value);
     }
 
     None
@@ -723,7 +791,7 @@ fn rewrite_max_nodes(model: &mut onnx::ModelProto) {
         Vec::<onnx::NodeProto>::with_capacity(graph.node.len());
     let mut rewrite_index = 0usize;
 
-    for node in graph.node.iter() {
+    for node in &graph.node {
         if node.op_type != "Max" || node.input.len() < 2 {
             rewritten_nodes.push(node.clone());
             continue;
@@ -807,7 +875,7 @@ fn rewrite_maxpool_extra_outputs(model: &mut onnx::ModelProto) {
     let mut rewritten_nodes =
         Vec::<onnx::NodeProto>::with_capacity(graph.node.len());
 
-    for node in graph.node.iter() {
+    for node in &graph.node {
         if node.op_type != "MaxPool" || node.output.len() <= 1 {
             rewritten_nodes.push(node.clone());
             continue;
@@ -886,9 +954,10 @@ fn rewrite_maxpool_extra_outputs(model: &mut onnx::ModelProto) {
 
 fn dims_from_value_info(value: &onnx::ValueInfoProto) -> Option<Vec<usize>> {
     let type_proto = value.r#type.as_ref()?;
-    let tensor_type = match type_proto.value.as_ref()? {
-        onnx::type_proto::Value::TensorType(tt) => tt,
-        _ => return None,
+    let onnx::type_proto::Value::TensorType(tensor_type) =
+        type_proto.value.as_ref()?
+    else {
+        return None;
     };
     let shape = tensor_type.shape.as_ref()?;
 
@@ -897,11 +966,15 @@ fn dims_from_value_info(value: &onnx::ValueInfoProto) -> Option<Vec<usize>> {
         .iter()
         .map(|dim| match dim.value.as_ref()? {
             onnx::tensor_shape_proto::dimension::Value::DimValue(v) => {
-                Some(*v as usize)
+                usize::try_from(*v).ok()
             }
             onnx::tensor_shape_proto::dimension::Value::DimParam(_) => None,
         })
         .collect::<Option<Vec<usize>>>()
+}
+
+fn parse_scalar_f32(value: &impl std::fmt::Display) -> Option<f32> {
+    value.to_string().parse::<f32>().ok()
 }
 
 fn find_model(dir: &Path, names: &[&str]) -> Option<PathBuf> {

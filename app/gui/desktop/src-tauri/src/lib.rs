@@ -33,6 +33,9 @@ use tauri::MobileEntryPoint;
 /// 3. Registers plugins (dialog, opener).
 /// 4. Registers the invoke handlers (commands callable from the frontend).
 /// 5. Runs the Tauri application loop.
+///
+/// # Panics
+/// Panics when Tauri fails to build the desktop application context.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let inference_engine = resolve_inference_engine();

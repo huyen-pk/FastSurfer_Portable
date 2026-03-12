@@ -6,6 +6,7 @@ pub enum InferenceEngine {
 }
 
 impl InferenceEngine {
+    #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
             Self::PythonIpc => "python-ipc",
@@ -19,6 +20,7 @@ impl InferenceEngine {
 /// Accepted values:
 /// - `python`, `python-ipc` (default)
 /// - `rust`, `rust-onnx`
+#[must_use]
 pub fn resolve_inference_engine() -> InferenceEngine {
     let raw = std::env::var("FASTSURFER_INFERENCE_ENGINE")
         .unwrap_or_else(|_| "python-ipc".to_string())

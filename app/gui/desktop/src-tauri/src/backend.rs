@@ -29,9 +29,127 @@ pub struct BackendState {
     pub current_pid: AtomicU32,
 }
 
+fn parse_requested_paths(
+    response: &Value,
+    fallback_requested_paths: &[String],
+) -> Vec<String> {
+    response
+        .get("requested_paths")
+        .and_then(Value::as_array)
+        .map_or_else(
+            || fallback_requested_paths.to_vec(),
+            |paths| {
+                paths
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(ToString::to_string)
+                    .collect::<Vec<String>>()
+            },
+        )
+}
+
+fn parse_run_result(result: &Value) -> String {
+    result.get("run_result").map_or_else(
+        || "null".to_string(),
+        |value| {
+            value
+                .as_str()
+                .map_or_else(|| value.to_string(), ToString::to_string)
+        },
+    )
+}
+
+fn parse_inference_output(
+    entry: &Value,
+    fallback_input_path: Option<&str>,
+) -> Result<InferenceOutput, String> {
+    let input_path = entry
+        .get("input_path")
+        .and_then(Value::as_str)
+        .map_or_else(
+            || {
+                fallback_input_path.map(ToString::to_string).ok_or_else(|| {
+                    "Missing input_path in IPC result".to_string()
+                })
+            },
+            |value| Ok(value.to_string()),
+        )?;
+
+    let output_path = entry
+        .get("output_path")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "Missing output_path in IPC result".to_string())?
+        .to_string();
+
+    let output_filename = entry
+        .get("output_filename")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "Missing output_filename in IPC result".to_string())?
+        .to_string();
+
+    let artifacts =
+        entry
+            .get("artifacts")
+            .and_then(Value::as_object)
+            .map(|obj| InferenceArtifacts {
+                brainmask_path: obj
+                    .get("brainmask_path")
+                    .and_then(Value::as_str)
+                    .map(ToString::to_string),
+                aseg_path: obj
+                    .get("aseg_path")
+                    .and_then(Value::as_str)
+                    .map(ToString::to_string),
+            });
+
+    let qc =
+        entry
+            .get("qc")
+            .and_then(Value::as_object)
+            .map(|obj| InferenceQc {
+                passed: obj.get("passed").and_then(Value::as_bool),
+                message: obj
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .map(ToString::to_string),
+            });
+
+    Ok(InferenceOutput {
+        input_path,
+        output_path,
+        output_filename,
+        run_result: parse_run_result(entry),
+        artifacts,
+        qc,
+    })
+}
+
+fn collect_result_directories(results: &[InferenceOutput]) -> Vec<String> {
+    let mut result_directories: Vec<String> = results
+        .iter()
+        .filter_map(|item| Path::new(&item.output_path).parent())
+        .map(|path| path.to_string_lossy().to_string())
+        .collect();
+    result_directories.sort();
+    result_directories.dedup();
+    result_directories
+}
+
+fn progress_from_event(value: &Value) -> usize {
+    value
+        .get("progress")
+        .and_then(Value::as_u64)
+        .and_then(|raw| usize::try_from(raw).ok())
+        .map_or(0, |progress| progress.min(100))
+}
+
 impl BackendState {
     /// Initializes the backend state by resolving paths and spawning the initial process.
     /// Performs an immediate "health" check RPC call to verify readiness.
+    ///
+    /// # Errors
+    /// Returns an error when process launch, backend path resolution, or the
+    /// initial health RPC check fails.
     pub fn new() -> Result<Self, String> {
         let cwd = std::env::current_dir()
             .map_err(|e| format!("Cannot resolve current dir: {e}"))?;
@@ -61,7 +179,8 @@ impl BackendState {
             current_pid: AtomicU32::new(current_pid),
         };
 
-        backend.run_ipc_request("health", json!({})).map_err(|e| {
+        let request = json!({});
+        backend.run_ipc_request("health", &request).map_err(|e| {
             format!("Backend process failed health check on startup: {e}")
         })?;
 
@@ -74,10 +193,15 @@ impl BackendState {
     /// * `method` - The RPC method name (e.g., "predict").
     /// * `params` - The JSON parameters for the method.
     /// * `on_progress` - Optional callback for handling "progress" events.
+    ///
+    /// # Errors
+    /// Returns an error when the backend mutex is poisoned, the request cannot
+    /// be written, the response is malformed, or the backend reports an RPC
+    /// failure.
     pub fn run_ipc_request_with_progress(
         &self,
         method: &str,
-        params: Value,
+        params: &Value,
         mut on_progress: Option<&mut dyn FnMut(Value)>,
     ) -> Result<Value, String> {
         eprintln!(
@@ -113,16 +237,23 @@ impl BackendState {
     }
 
     /// Executes a simple JSON-RPC method without progress tracking.
+    ///
+    /// # Errors
+    /// Returns an error when the backend RPC request fails.
     pub fn run_ipc_request(
         &self,
         method: &str,
-        params: Value,
+        params: &Value,
     ) -> Result<Value, String> {
         self.run_ipc_request_with_progress(method, params, None)
     }
 
     /// Restarts the backend subprocess.
     /// Used when the previous process has crashed, been killed, or is unresponsive.
+    ///
+    /// # Errors
+    /// Returns an error when restarting the subprocess or re-running the health
+    /// check fails.
     pub fn restart_backend_process(&self) -> Result<(), String> {
         let mut process_guard = self
             .process
@@ -169,7 +300,12 @@ impl BackendState {
     }
 
     /// Terminates the current backend process explicitly.
-    /// Tries a gentle SIGTERM first, then falls back to forceful SIGKILL (or TaskKill /F).
+    /// Tries a gentle `SIGTERM` first, then falls back to forceful `SIGKILL`
+    /// or `taskkill /F`.
+    ///
+    /// # Errors
+    /// Returns an error when the force-stop command cannot be invoked or exits
+    /// unsuccessfully.
     pub fn force_stop_current_process(&self) -> Result<(), String> {
         let pid = self.current_pid.load(Ordering::SeqCst);
         if pid == 0 {
@@ -234,6 +370,10 @@ impl BackendState {
     }
 
     /// Sends a shutdown command to the backend politely before killing it.
+    ///
+    /// # Errors
+    /// Returns an error when the backend cannot be terminated after the best
+    /// effort shutdown request.
     pub fn shutdown_for_exit(&self) -> Result<(), String> {
         if let Ok(mut process) = self.process.try_lock() {
             let request = json!({
@@ -248,6 +388,10 @@ impl BackendState {
     }
 
     /// Initiates a batch prediction request via IPC.
+    ///
+    /// # Errors
+    /// Returns an error when the request fails or the backend response omits
+    /// the expected acknowledgement fields.
     pub fn start_predict_batch(
         &self,
         file_paths: &[String],
@@ -258,13 +402,11 @@ impl BackendState {
             file_paths.len(),
             folder_paths.len()
         );
-        let result = self.run_ipc_request(
-            "start_predict_batch",
-            json!({
-                "file_paths": file_paths,
-                "folder_paths": folder_paths,
-            }),
-        )?;
+        let request = json!({
+            "file_paths": file_paths,
+            "folder_paths": folder_paths,
+        });
+        let result = self.run_ipc_request("start_predict_batch", &request)?;
 
         let ack_message = result
             .get("ack_message")
@@ -293,6 +435,10 @@ impl BackendState {
     }
 
     /// Runs a full batch prediction call (blocking until complete).
+    ///
+    /// # Errors
+    /// Returns an error when the backend request fails or the response is
+    /// missing required result fields.
     pub fn predict_batch(
         &self,
         file_paths: &[String],
@@ -305,13 +451,11 @@ impl BackendState {
             file_paths.len(),
             folder_paths.len()
         );
-        let result = self.run_ipc_request(
-            "predict_batch",
-            json!({
-                "file_paths": file_paths,
-                "folder_paths": folder_paths,
-            }),
-        )?;
+        let request = json!({
+            "file_paths": file_paths,
+            "folder_paths": folder_paths,
+        });
+        let result = self.run_ipc_request("predict_batch", &request)?;
 
         let ack_message_from_backend = result
             .get("ack_message")
@@ -319,17 +463,8 @@ impl BackendState {
             .unwrap_or(fallback_ack_message)
             .to_string();
 
-        let requested_paths = result
-            .get("requested_paths")
-            .and_then(Value::as_array)
-            .map(|paths| {
-                paths
-                    .iter()
-                    .filter_map(Value::as_str)
-                    .map(ToString::to_string)
-                    .collect::<Vec<String>>()
-            })
-            .unwrap_or_else(|| fallback_requested_paths.to_vec());
+        let requested_paths =
+            parse_requested_paths(&result, fallback_requested_paths);
 
         let results_array = result
             .get("results")
@@ -338,85 +473,16 @@ impl BackendState {
 
         let mut results = Vec::with_capacity(results_array.len());
         for entry in results_array {
-            let input_path = entry
-                .get("input_path")
-                .and_then(Value::as_str)
-                .ok_or_else(|| "Missing input_path in IPC result".to_string())?
-                .to_string();
-
-            let output_path = entry
-                .get("output_path")
-                .and_then(Value::as_str)
-                .ok_or_else(|| "Missing output_path in IPC result".to_string())?
-                .to_string();
-
-            let output_filename = entry
-                .get("output_filename")
-                .and_then(Value::as_str)
-                .ok_or_else(|| {
-                    "Missing output_filename in IPC result".to_string()
-                })?
-                .to_string();
-
-            let run_result = entry
-                .get("run_result")
-                .map(|v| {
-                    if let Some(s) = v.as_str() {
-                        s.to_string()
-                    } else {
-                        v.to_string()
-                    }
-                })
-                .unwrap_or_else(|| "null".to_string());
-
-            let artifacts = entry
-                .get("artifacts")
-                .and_then(Value::as_object)
-                .map(|obj| InferenceArtifacts {
-                    brainmask_path: obj
-                        .get("brainmask_path")
-                        .and_then(Value::as_str)
-                        .map(ToString::to_string),
-                    aseg_path: obj
-                        .get("aseg_path")
-                        .and_then(Value::as_str)
-                        .map(ToString::to_string),
-                });
-
-            let qc = entry.get("qc").and_then(Value::as_object).map(|obj| {
-                InferenceQc {
-                    passed: obj.get("passed").and_then(Value::as_bool),
-                    message: obj
-                        .get("message")
-                        .and_then(Value::as_str)
-                        .map(ToString::to_string),
-                }
-            });
-
-            results.push(InferenceOutput {
-                input_path,
-                output_path,
-                output_filename,
-                run_result,
-                artifacts,
-                qc,
-            });
+            results.push(parse_inference_output(entry, None)?);
         }
 
-        let mut result_directories: Vec<String> = results
-            .iter()
-            .filter_map(|item| Path::new(&item.output_path).parent())
-            .map(|path| path.to_string_lossy().to_string())
-            .collect();
-        result_directories.sort();
-        result_directories.dedup();
+        let result_directories = collect_result_directories(&results);
 
         let ack_message = if result_directories.is_empty() {
             ack_message_from_backend
         } else {
             format!(
-                "{} Results directory: {}",
-                ack_message_from_backend,
+                "{ack_message_from_backend} Results directory: {}",
                 result_directories.join(", ")
             )
         };
@@ -434,6 +500,10 @@ impl BackendState {
     }
 
     /// Predicts a single file, streaming progress events via the provided closure.
+    ///
+    /// # Errors
+    /// Returns an error when the prediction RPC fails or the response omits
+    /// required inference output fields.
     pub fn predict_single_path(
         &self,
         input_path: &str,
@@ -441,16 +511,11 @@ impl BackendState {
         on_progress: Option<&mut dyn FnMut(usize, String)>,
     ) -> Result<InferenceOutput, String> {
         eprintln!(
-            "[trace][backend] predict_single_path task_id={} input_path={}",
-            task_id, input_path
+            "[trace][backend] predict_single_path task_id={task_id} input_path={input_path}"
         );
         let mut on_progress = on_progress;
         let mut progress_adapter = |value: Value| {
-            let progress = value
-                .get("progress")
-                .and_then(Value::as_u64)
-                .map(|raw| (raw as usize).min(100))
-                .unwrap_or(0);
+            let progress = progress_from_event(&value);
 
             let message = value
                 .get("message")
@@ -463,70 +528,16 @@ impl BackendState {
             }
         };
 
+        let request = json!({
+            "input_path": input_path,
+            "task_id": task_id,
+        });
         let result = self.run_ipc_request_with_progress(
             "predict",
-            json!({
-                "input_path": input_path,
-                "task_id": task_id,
-            }),
+            &request,
             Some(&mut progress_adapter),
         )?;
 
-        let output_path = result
-            .get("output_path")
-            .and_then(Value::as_str)
-            .ok_or_else(|| "Missing output_path in IPC result".to_string())?
-            .to_string();
-
-        let output_filename = result
-            .get("output_filename")
-            .and_then(Value::as_str)
-            .ok_or_else(|| "Missing output_filename in IPC result".to_string())?
-            .to_string();
-
-        let run_result = result
-            .get("run_result")
-            .map(|v| {
-                if let Some(s) = v.as_str() {
-                    s.to_string()
-                } else {
-                    v.to_string()
-                }
-            })
-            .unwrap_or_else(|| "null".to_string());
-
-        let artifacts =
-            result
-                .get("artifacts")
-                .and_then(Value::as_object)
-                .map(|obj| InferenceArtifacts {
-                    brainmask_path: obj
-                        .get("brainmask_path")
-                        .and_then(Value::as_str)
-                        .map(ToString::to_string),
-                    aseg_path: obj
-                        .get("aseg_path")
-                        .and_then(Value::as_str)
-                        .map(ToString::to_string),
-                });
-
-        let qc = result.get("qc").and_then(Value::as_object).map(|obj| {
-            InferenceQc {
-                passed: obj.get("passed").and_then(Value::as_bool),
-                message: obj
-                    .get("message")
-                    .and_then(Value::as_str)
-                    .map(ToString::to_string),
-            }
-        });
-
-        Ok(InferenceOutput {
-            input_path: input_path.to_string(),
-            output_path,
-            output_filename,
-            run_result,
-            artifacts,
-            qc,
-        })
+        parse_inference_output(&result, Some(input_path))
     }
 }

@@ -1,6 +1,7 @@
 use crate::backend::BackendState;
 use crate::feature_flags::InferenceEngine;
 use std::collections::BTreeSet;
+use std::mem::ManuallyDrop;
 use std::sync::{Arc, Mutex};
 use tauri::State;
 
@@ -19,18 +20,24 @@ pub struct AppState {
 
 /// Helper command to flag a specific task ID as cancelled.
 /// Also forcefully stops the backend process to interrupt current work immediately.
+///
+/// # Errors
+/// Returns an error when the cancellation registry mutex is poisoned.
 #[tauri::command]
 pub fn cancel_fastsurfer_task(
     app_state: State<'_, AppState>,
-    task_id: String,
+    task_id: &str,
 ) -> Result<(), String> {
-    let mut cancelled = app_state
-        .cancelled_tasks
+    let app_state = ManuallyDrop::new(app_state);
+    let cancelled_tasks = app_state.cancelled_tasks.clone();
+    let backend = app_state.backend.clone();
+
+    let mut cancelled = cancelled_tasks
         .lock()
         .map_err(|_| "Cancelled tasks mutex was poisoned".to_string())?;
-    cancelled.insert(task_id);
+    cancelled.insert(task_id.to_string());
 
-    if let Some(backend) = app_state.backend.as_ref() {
+    if let Some(backend) = backend.as_ref() {
         let _ = backend.force_stop_current_process();
     }
 
@@ -38,11 +45,17 @@ pub fn cancel_fastsurfer_task(
 }
 
 /// Gracefully shuts down the backend process before the application exits.
+///
+/// # Errors
+/// Returns an error when the backend shutdown sequence fails.
 #[tauri::command]
 pub fn shutdown_backend_for_exit(
     app_state: State<'_, AppState>,
 ) -> Result<(), String> {
-    if let Some(backend) = app_state.backend.as_ref() {
+    let app_state = ManuallyDrop::new(app_state);
+    let backend = app_state.backend.clone();
+
+    if let Some(backend) = backend.as_ref() {
         backend.shutdown_for_exit()?;
     }
     Ok(())

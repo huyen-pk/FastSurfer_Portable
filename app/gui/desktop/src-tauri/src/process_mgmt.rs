@@ -32,8 +32,9 @@ pub struct BackendProcess {
 /// * `launch` - The command configuration to execute.
 /// * `repo_root` - Optional repository root used to set `PYTHONPATH` for development.
 ///
-/// # Returns
-/// A `BackendProcess` handle or an error string.
+/// # Errors
+/// Returns an error when the child process cannot be spawned or its stdio
+/// handles cannot be captured.
 pub fn spawn_backend_process(
     launch: &BackendLaunchCommand,
     repo_root: Option<&PathBuf>,
@@ -132,31 +133,28 @@ pub fn load_desktop_env(cwd: &Path, exe_dir: &Path) {
 
     for raw_line in contents.lines() {
         let line = raw_line.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
+        if !(line.is_empty() || line.starts_with('#'))
+            && let Some((key, value)) = line.split_once('=')
+        {
+            let env_key = key.trim();
+            if !(env_key.is_empty() || std::env::var(env_key).is_ok()) {
+                let env_value =
+                    value.trim().trim_matches('"').trim_matches('\'');
+                if !env_value.is_empty() {
+                    // Note: std::env::set_var is unsafe in Rust 2024 and forbidden by project policy.
+                    // We skip loading into the current process's environment.
+                    // Future improvement: Store in a local Map for child process spawning.
+                }
+            }
         }
-
-        let Some((key, value)) = line.split_once('=') else {
-            continue;
-        };
-
-        let env_key = key.trim();
-        if env_key.is_empty() || std::env::var(env_key).is_ok() {
-            continue;
-        }
-
-        let env_value = value.trim().trim_matches('"').trim_matches('\'');
-        if env_value.is_empty() {
-            continue;
-        }
-
-        // Note: std::env::set_var is unsafe in Rust 2024 and forbidden by project policy.
-        // We skip loading into the current process's environment.
-        // Future improvement: Store in a local Map for child process spawning.
     }
 }
 
-/// Locates the bundled backend binary (e.g. created by PyInstaller).
+/// Locates the bundled backend binary (e.g. created by `PyInstaller`).
+///
+/// # Errors
+/// Returns an error when `app/gui/desktop/backend/main` cannot be found from
+/// either the current working directory or the executable directory.
 pub fn resolve_backend_binary_path_from(
     cwd: &Path,
     exe_dir: &Path,
@@ -188,6 +186,7 @@ pub fn resolve_backend_binary_path_from(
 }
 
 /// Locates the python backend script `ipc_server.py` for development mode.
+#[must_use]
 pub fn resolve_python_backend_script_path_from(
     cwd: &Path,
     exe_dir: &Path,
@@ -215,6 +214,7 @@ pub fn resolve_python_backend_script_path_from(
 }
 
 /// Finds a valid python executable, checking environment overrides first.
+#[must_use]
 pub fn resolve_python_executable() -> Option<String> {
     let mut candidates: Vec<String> = Vec::new();
 
@@ -245,6 +245,10 @@ pub fn resolve_python_executable() -> Option<String> {
 }
 
 /// Determines the best command to launch the backend: either the bundled binary or python script.
+///
+/// # Errors
+/// Returns an error when neither a bundled backend binary nor a usable Python
+/// runtime with the development IPC script can be found.
 pub fn resolve_backend_launch_command_from(
     cwd: &Path,
     exe_dir: &Path,

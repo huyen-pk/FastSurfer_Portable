@@ -1,8 +1,8 @@
 // This test suite integrates with test-containers for environment isolation.
 use crate::backend::BackendState;
 use crate::inference::preprocess::{
-    load_input_volume, oriented_to_xyz, prepare_plane_input_for_slice,
-    transformed_volume_shape,
+    PreparedPlaneInput, load_input_volume, oriented_to_xyz,
+    prepare_plane_input_for_slice, transformed_volume_shape,
 };
 use crate::inference::run_native_inference;
 use crate::models::InferencePlane;
@@ -10,6 +10,7 @@ use crate::process_mgmt::{
     BackendLaunchCommand, BackendProcess, resolve_python_executable,
 };
 use nifti::{IntoNdArray, NiftiObject, ReaderOptions};
+use std::fmt::Write as _;
 use std::fs;
 use std::io::{BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -25,12 +26,174 @@ pub(super) fn next_test_id() -> usize {
     NEXT_ID.fetch_add(1, Ordering::Relaxed)
 }
 
+fn round_f32_to_i32(value: f32) -> i32 {
+    value
+        .round()
+        .to_string()
+        .parse::<i32>()
+        .expect("rounded f32 label should fit into i32")
+}
+
+fn usize_to_f64(value: usize) -> f64 {
+    f64::from(u32::try_from(value).expect("usize value should fit into u32"))
+}
+
+fn write_prepared_tensor_raw(
+    run_dir: &Path,
+    prepared: &PreparedPlaneInput,
+) -> Result<PathBuf, String> {
+    let rust_raw = run_dir.join("rust_tensor.raw");
+    let mut raw_file = fs::File::create(&rust_raw).map_err(|error| {
+        format!(
+            "failed creating rust raw tensor file '{}': {error}",
+            rust_raw.display()
+        )
+    })?;
+
+    for value in &prepared.tensor_data {
+        raw_file.write_all(&value.to_le_bytes()).map_err(|error| {
+            format!(
+                "failed writing rust raw tensor file '{}': {error}",
+                rust_raw.display()
+            )
+        })?;
+    }
+
+    Ok(rust_raw)
+}
+
+struct PythonPreprocessParityArgs<'a> {
+    python_bin: &'a str,
+    repo_root: &'a Path,
+    input_nii: &'a Path,
+    plane: InferencePlane,
+    num_channels: usize,
+    base_res: f32,
+    slice_index: usize,
+    prepared: &'a PreparedPlaneInput,
+    rust_raw: &'a Path,
+}
+
+fn run_python_preprocess_parity(
+    args: &PythonPreprocessParityArgs<'_>,
+) -> Result<(), String> {
+    let shape_csv = args
+        .prepared
+        .tensor_shape
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<String>>()
+        .join(",");
+
+    let script = r#"
+import nibabel as nib
+import numpy as np
+import sys
+
+input_nii = sys.argv[1]
+plane = sys.argv[2]
+num_channels = int(sys.argv[3])
+base_res = float(sys.argv[4])
+slice_index = int(sys.argv[5])
+rust_scale0 = float(sys.argv[6])
+rust_scale1 = float(sys.argv[7])
+shape_csv = sys.argv[8]
+rust_raw = sys.argv[9]
+
+shape = tuple(int(x) for x in shape_csv.split(","))
+orig_data = np.asanyarray(nib.load(input_nii).dataobj)
+orig_zoom = np.asarray(nib.load(input_nii).header.get_zooms()[:3], dtype=np.float32)
+
+def transform_axial(vol):
+    return np.moveaxis(vol, [0, 1, 2], [1, 2, 0])
+
+def transform_sagittal(vol):
+    return np.moveaxis(vol, [0, 1, 2], [2, 1, 0])
+
+def get_thick_slices(img_data, slice_thickness=3):
+    img_data_pad = np.pad(img_data, ((0, 0), (0, 0), (slice_thickness, slice_thickness)), mode="edge")
+    from numpy.lib.stride_tricks import sliding_window_view
+    return sliding_window_view(img_data_pad, 2 * slice_thickness + 1, axis=2)
+
+def to_tensor_test(img):
+    img = img.astype(np.float32)
+    img = np.clip(img / 255.0, a_min=0.0, a_max=1.0)
+    img = img.transpose((2, 0, 1))
+    return img
+
+slice_thickness = num_channels // 2
+if plane == "sagittal":
+    transformed = transform_sagittal(orig_data)
+    zoom = np.asarray(orig_zoom)[[2, 1]]
+elif plane == "axial":
+    transformed = transform_axial(orig_data)
+    zoom = np.asarray(orig_zoom)[[2, 0]]
+else:
+    transformed = orig_data
+    zoom = np.asarray(orig_zoom)[[0, 1]]
+
+orig_thick = get_thick_slices(transformed, slice_thickness)
+orig_thick = np.transpose(orig_thick, (2, 0, 1, 3))
+py_image = to_tensor_test(orig_thick[slice_index])
+py_scale = base_res / zoom
+
+rust = np.fromfile(rust_raw, dtype=np.float32).reshape(shape)
+rust_image = rust[0]
+rust_scale = np.asarray([rust_scale0, rust_scale1], dtype=np.float32)
+
+if rust_image.shape != py_image.shape:
+    raise SystemExit(f"preprocess shape mismatch: rust={rust_image.shape} python={py_image.shape}")
+
+if not np.allclose(rust_scale, py_scale, rtol=0.0, atol=1e-6):
+    raise SystemExit(f"scale mismatch: rust={rust_scale.tolist()} python={py_scale.tolist()}")
+
+if not np.allclose(rust_image, py_image, rtol=0.0, atol=1e-6):
+    diff = np.abs(rust_image - py_image)
+    raise SystemExit(
+        f"tensor mismatch: max_abs_diff={float(diff.max()):.8f} mean_abs_diff={float(diff.mean()):.8f}"
+    )
+"#;
+
+    let output = Command::new(args.python_bin)
+        .arg("-c")
+        .arg(script)
+        .arg(args.input_nii)
+        .arg(args.plane.as_str())
+        .arg(args.num_channels.to_string())
+        .arg(format!("{}", args.base_res))
+        .arg(args.slice_index.to_string())
+        .arg(format!("{:.8}", args.prepared.scale_factor[0]))
+        .arg(format!("{:.8}", args.prepared.scale_factor[1]))
+        .arg(shape_csv)
+        .arg(args.rust_raw)
+        .current_dir(args.repo_root)
+        .output()
+        .map_err(|error| {
+            format!("failed to execute python preprocess parity check: {error}")
+        })?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        return Err(format!(
+            "python preprocess parity failed (plane={}, slice={}): stdout='{}' stderr='{}'",
+            args.plane.as_str(),
+            args.slice_index,
+            stdout.trim(),
+            stderr.trim()
+        ));
+    }
+
+    Ok(())
+}
+
 pub(super) fn create_backend_state_with_fake_responses(
     responses: &[&str],
 ) -> BackendState {
     let mut branches = String::new();
     for (index, response) in responses.iter().enumerate() {
-        branches.push_str(&format!("{index}) printf '%s\\n' '{response}' ;;"));
+        write!(branches, "{index}) printf '%s\\n' '{response}' ;;")
+            .expect("writing response branch should succeed");
     }
 
     let script = format!(
@@ -311,7 +474,7 @@ fn load_nifti_labels_as_i32(
     let shape = array.shape().to_vec();
     let labels = array
         .iter()
-        .map(|value| value.round() as i32)
+        .map(|value| round_f32_to_i32(*value))
         .collect::<Vec<i32>>();
 
     Ok((labels, shape))
@@ -411,8 +574,7 @@ pub(super) fn compare_label_volumes_per_plane_single_slice_in_rust(
 
     if rust_shape.len() < 3 || gold_shape.len() < 3 {
         return Err(format!(
-            "expected rank-3 volume shape, got rust={:?} golden={:?}",
-            rust_shape, gold_shape
+            "expected rank-3 volume shape, got rust={rust_shape:?} golden={gold_shape:?}"
         ));
     }
 
@@ -494,7 +656,7 @@ pub(super) fn compare_label_volumes_per_plane_single_slice_in_rust(
         let ratio = if total == 0 {
             0.0
         } else {
-            (diff as f64) / (total as f64)
+            usize_to_f64(diff) / usize_to_f64(total)
         };
 
         if ratio > max_mismatch_ratio {
@@ -543,128 +705,19 @@ pub(super) fn compare_preprocess_slice_with_python(
         )
     })?;
 
-    let rust_raw = run_dir.join("rust_tensor.raw");
-    let mut raw_file = fs::File::create(&rust_raw).map_err(|error| {
-        format!(
-            "failed creating rust raw tensor file '{}': {error}",
-            rust_raw.display()
-        )
-    })?;
-
-    for value in &prepared.tensor_data {
-        raw_file.write_all(&value.to_le_bytes()).map_err(|error| {
-            format!(
-                "failed writing rust raw tensor file '{}': {error}",
-                rust_raw.display()
-            )
-        })?;
-    }
-
-    let shape_csv = prepared
-        .tensor_shape
-        .iter()
-        .map(|dim| dim.to_string())
-        .collect::<Vec<String>>()
-        .join(",");
-
-    let script = r#"
-import nibabel as nib
-import numpy as np
-import sys
-
-input_nii = sys.argv[1]
-plane = sys.argv[2]
-num_channels = int(sys.argv[3])
-base_res = float(sys.argv[4])
-slice_index = int(sys.argv[5])
-rust_scale0 = float(sys.argv[6])
-rust_scale1 = float(sys.argv[7])
-shape_csv = sys.argv[8]
-rust_raw = sys.argv[9]
-
-shape = tuple(int(x) for x in shape_csv.split(","))
-orig_data = np.asanyarray(nib.load(input_nii).dataobj)
-orig_zoom = np.asarray(nib.load(input_nii).header.get_zooms()[:3], dtype=np.float32)
-
-def transform_axial(vol):
-    return np.moveaxis(vol, [0, 1, 2], [1, 2, 0])
-
-def transform_sagittal(vol):
-    return np.moveaxis(vol, [0, 1, 2], [2, 1, 0])
-
-def get_thick_slices(img_data, slice_thickness=3):
-    img_data_pad = np.pad(img_data, ((0, 0), (0, 0), (slice_thickness, slice_thickness)), mode="edge")
-    from numpy.lib.stride_tricks import sliding_window_view
-    return sliding_window_view(img_data_pad, 2 * slice_thickness + 1, axis=2)
-
-def to_tensor_test(img):
-    img = img.astype(np.float32)
-    img = np.clip(img / 255.0, a_min=0.0, a_max=1.0)
-    img = img.transpose((2, 0, 1))
-    return img
-
-slice_thickness = num_channels // 2
-if plane == "sagittal":
-    transformed = transform_sagittal(orig_data)
-    zoom = np.asarray(orig_zoom)[[2, 1]]
-elif plane == "axial":
-    transformed = transform_axial(orig_data)
-    zoom = np.asarray(orig_zoom)[[2, 0]]
-else:
-    transformed = orig_data
-    zoom = np.asarray(orig_zoom)[[0, 1]]
-
-orig_thick = get_thick_slices(transformed, slice_thickness)
-orig_thick = np.transpose(orig_thick, (2, 0, 1, 3))
-py_image = to_tensor_test(orig_thick[slice_index])
-py_scale = base_res / zoom
-
-rust = np.fromfile(rust_raw, dtype=np.float32).reshape(shape)
-rust_image = rust[0]
-rust_scale = np.asarray([rust_scale0, rust_scale1], dtype=np.float32)
-
-if rust_image.shape != py_image.shape:
-    raise SystemExit(f"preprocess shape mismatch: rust={rust_image.shape} python={py_image.shape}")
-
-if not np.allclose(rust_scale, py_scale, rtol=0.0, atol=1e-6):
-    raise SystemExit(f"scale mismatch: rust={rust_scale.tolist()} python={py_scale.tolist()}")
-
-if not np.allclose(rust_image, py_image, rtol=0.0, atol=1e-6):
-    diff = np.abs(rust_image - py_image)
-    raise SystemExit(
-        f"tensor mismatch: max_abs_diff={float(diff.max()):.8f} mean_abs_diff={float(diff.mean()):.8f}"
-    )
-"#;
-
-    let output = Command::new(python_bin)
-        .arg("-c")
-        .arg(script)
-        .arg(input_nii)
-        .arg(plane.as_str())
-        .arg(num_channels.to_string())
-        .arg(format!("{base_res}"))
-        .arg(slice_index.to_string())
-        .arg(format!("{:.8}", prepared.scale_factor[0]))
-        .arg(format!("{:.8}", prepared.scale_factor[1]))
-        .arg(shape_csv)
-        .arg(&rust_raw)
-        .current_dir(repo_root)
-        .output()
-        .map_err(|error| {
-            format!("failed to execute python preprocess parity check: {error}")
-        })?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        return Err(format!(
-            "python preprocess parity failed (plane={}, slice={}): stdout='{}' stderr='{}'",
-            plane.as_str(),
-            slice_index,
-            stdout.trim(),
-            stderr.trim()
-        ));
-    }
+    let rust_raw = write_prepared_tensor_raw(&run_dir, &prepared)?;
+    let parity_args = PythonPreprocessParityArgs {
+        python_bin,
+        repo_root,
+        input_nii,
+        plane,
+        num_channels,
+        base_res,
+        slice_index,
+        prepared: &prepared,
+        rust_raw: &rust_raw,
+    };
+    run_python_preprocess_parity(&parity_args)?;
 
     Ok(())
 }

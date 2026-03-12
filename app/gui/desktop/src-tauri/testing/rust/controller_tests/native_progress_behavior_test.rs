@@ -20,7 +20,7 @@ async fn test_native_inference_reports_progress_in_real_time() {
 
     for var in required_vars {
         if std::env::var(var).is_err() {
-            println!("Skipping BDD test: {} is not set.", var);
+            println!("Skipping BDD test: {var} is not set.");
             return;
         }
     }
@@ -42,10 +42,9 @@ async fn test_native_inference_reports_progress_in_real_time() {
     app_handle.listen_any("fastsurfer://inference-progress", move |event| {
         if let Ok(progress_event) =
             serde_json::from_str::<InferenceProgressEvent>(event.payload())
+            && progress_event.task_id == task_id_clone
         {
-            if progress_event.task_id == task_id_clone {
-                let _ = tx.blocking_send(progress_event);
-            }
+            let _ = tx.blocking_send(progress_event);
         }
     });
 
@@ -77,7 +76,7 @@ async fn test_native_inference_reports_progress_in_real_time() {
                     finished = true;
                 }
             }
-            _ = &mut timeout => {
+            () = &mut timeout => {
                 break;
             }
         }

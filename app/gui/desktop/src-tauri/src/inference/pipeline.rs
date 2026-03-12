@@ -174,17 +174,17 @@ impl NativeOnnxSessions {
 
         output_shapes
             .first()
-            .and_then(|o: &Option<Vec<usize>>| o.as_ref())
-            .and_then(|v: &Vec<usize>| v.get(1).copied())
+            .and_then(std::option::Option::as_deref)
+            .and_then(|dims| dims.get(1).copied())
             .unwrap_or(79usize)
     }
 }
 
 impl PlaneSessionRef<'_> {
-    fn input_shape(&self) -> &Option<Vec<usize>> {
+    fn input_shape(&self) -> Option<&[usize]> {
         match self {
-            Self::Candle(session) => &session.input_shape,
-            Self::Ort(session) => &session.input_shape,
+            Self::Candle(session) => session.input_shape.as_deref(),
+            Self::Ort(session) => session.input_shape.as_deref(),
         }
     }
 
@@ -230,9 +230,8 @@ fn discovery_summary(models: &NativeOnnxSessions) -> String {
     models.model_paths_summary()
 }
 
-fn session_channels_or_default(input_shape: &Option<Vec<usize>>) -> usize {
+fn session_channels_or_default(input_shape: Option<&[usize]>) -> usize {
     input_shape
-        .as_ref()
         .and_then(|dims| dims.get(1).copied())
         .filter(|channels| *channels > 0)
         .unwrap_or(7)
@@ -319,11 +318,11 @@ fn build_sampled_lookup(
         (InferencePlane::Sagittal, sagittal_indices),
         (InferencePlane::Axial, axial_indices),
     ] {
-        let [h, _w, _s] =
+        let [height, width, _slice_count] =
             preprocess::transformed_volume_shape(volume.shape_xyz, plane);
-        for &slice_index in indices.iter() {
-            for ih in 0..h {
-                for iw in 0.._w {
+        for &slice_index in indices {
+            for ih in 0..height {
+                for iw in 0..width {
                     let (x, y, z) =
                         preprocess::oriented_to_xyz(plane, ih, iw, slice_index);
                     let voxel_offset = (x * sy * sz) + (y * sz) + z;
@@ -342,23 +341,34 @@ fn build_sampled_lookup(
     (sampled_order, sampled_lookup)
 }
 
-fn finalize_native_result<F>(
-    volume: &InputVolume,
-    label_indices_xyz: &[u16],
-    class_hist: &[usize],
-    plane_first_summaries: &[String],
-    sessions: &NativeOnnxSessions,
-    lut_ids: &[u16],
-    input_path: &str,
-    mut on_progress: F,
-) -> Result<NativeSingleResult, String>
-where
-    F: FnMut(u8, String),
-{
+struct FinalizeNativeResultInput<'a> {
+    volume: &'a InputVolume,
+    label_indices_xyz: &'a [u16],
+    class_hist: &'a [usize],
+    plane_first_summaries: &'a [String],
+    sessions: &'a NativeOnnxSessions,
+    lut_ids: &'a [u16],
+    input_path: &'a str,
+}
+
+fn finalize_native_result(
+    input: &FinalizeNativeResultInput<'_>,
+    on_progress: &mut dyn FnMut(u8, String),
+) -> Result<NativeSingleResult, String> {
+    let FinalizeNativeResultInput {
+        volume,
+        label_indices_xyz,
+        class_hist,
+        plane_first_summaries,
+        sessions,
+        lut_ids,
+        input_path,
+    } = *input;
+
     on_progress(92, "Converting logits to label volume...".to_string());
 
     let mut pred_labels_xyz =
-        map_label_indices_to_lut(&label_indices_xyz, lut_ids)?;
+        map_label_indices_to_lut(label_indices_xyz, lut_ids)?;
     postprocess::split_cortex_labels(&mut pred_labels_xyz, volume.shape_xyz);
 
     let mut ranked = class_hist
@@ -481,79 +491,56 @@ fn legacy_preprocessing_summary(models: &NativeOnnxSessions) -> String {
     format!("{axial} || {coronal} || {sagittal}")
 }
 
-fn execute_forward_pass<F>(
+struct ForwardPassRequest<'a> {
+    sessions: &'a NativeOnnxSessions,
+    volume: &'a InputVolume,
+    plane_specs: &'a [(InferencePlane, &'a [usize], usize, f32)],
+}
+
+fn execute_forward_pass(
     rt: &tokio::runtime::Handle,
-    sessions: &NativeOnnxSessions,
-    volume: &InputVolume,
-    plane_specs: &[(InferencePlane, &[usize], usize, f32)],
-    sparse_mode: bool,
-    sampled_lookup: &HashMap<usize, usize>,
-    merged_logits: &mut [f32],
-    _total_slices: usize,
-    should_cancel: &dyn Fn() -> bool,
-    on_progress: &mut F,
-    plane_first_summaries: &mut Vec<String>,
-) -> Result<(), String>
-where
-    F: FnMut(u8, String),
-{
+    request: &ForwardPassRequest<'_>,
+    ctx: &mut ForwardPassContext<'_>,
+) -> Result<(), String> {
+    let ForwardPassRequest {
+        sessions,
+        volume,
+        plane_specs,
+    } = *request;
+
     // Decide parallel vs sequential based on runtime flag.
     // Note: `sparse_mode` (sampling slices) is orthogonal and may be
     // executed in either parallel or sequential mode depending on the
     // `FASTSURFER_NATIVE_PARALLEL` environment setting.
     let parallel_enabled = native_parallel_enabled();
     if parallel_enabled {
-        execute_forward_pass_parallel(
-            rt,
-            sessions,
-            volume,
-            plane_specs,
-            sparse_mode,
-            sampled_lookup,
-            merged_logits,
-            _total_slices,
-            should_cancel,
-            on_progress,
-            plane_first_summaries,
-        )
+        execute_forward_pass_parallel(rt, sessions, volume, plane_specs, ctx)
     } else {
-        execute_forward_pass_sequential(
-            rt,
-            sessions,
-            volume,
-            plane_specs,
-            sparse_mode,
-            sampled_lookup,
-            merged_logits,
-            _total_slices,
-            should_cancel,
-            on_progress,
-            plane_first_summaries,
-        )
+        execute_forward_pass_sequential(rt, sessions, volume, plane_specs, ctx)
     }
 }
 
-fn execute_forward_pass_parallel<F>(
+struct ForwardPassContext<'a> {
+    sparse_mode: bool,
+    sampled_lookup: &'a HashMap<usize, usize>,
+    merged_logits: &'a mut [f32],
+    should_cancel: &'a dyn Fn() -> bool,
+    on_progress: &'a mut dyn FnMut(u8, String),
+    plane_first_summaries: &'a mut Vec<String>,
+}
+
+fn execute_forward_pass_parallel(
     rt: &tokio::runtime::Handle,
     sessions: &NativeOnnxSessions,
     volume: &InputVolume,
     plane_specs: &[(InferencePlane, &[usize], usize, f32)],
-    sparse_mode: bool,
-    sampled_lookup: &HashMap<usize, usize>,
-    merged_logits: &mut [f32],
-    _total_slices: usize,
-    should_cancel: &dyn Fn() -> bool,
-    on_progress: &mut F,
-    plane_first_summaries: &mut Vec<String>,
-) -> Result<(), String>
-where
-    F: FnMut(u8, String),
-{
-    if should_cancel() {
+    ctx: &mut ForwardPassContext,
+) -> Result<(), String> {
+    if (ctx.should_cancel)() {
         return Err(cancelled_error());
     }
 
-    on_progress(5, "Initializing parallel ONNX inference...".to_string());
+    (ctx.on_progress)(5, "Initializing parallel ONNX inference...".to_string());
 
     let (tx, mut rx) = mpsc::unbounded_channel::<
         Result<(InferencePlane, f32, PlaneForwardResult), String>,
@@ -573,25 +560,29 @@ where
         .collect();
 
     for (plane_value, slice_indices_owned, _channels_value, weight_value) in
-        jobs.into_iter()
+        jobs
     {
         if slice_indices_owned.is_empty() {
             continue;
         }
+
+        if (ctx.should_cancel)() {
+            return Err(cancelled_error());
+        }
+
         let tx_clone = tx.clone();
         let sessions_worker = sessions_arc.clone();
         let volume_worker = volume_arc.clone();
+
         handles.push(rt.spawn_blocking(move || {
-            for &slice_index in slice_indices_owned.iter() {
-                let plane_result = run_single_plane_forward_at_slice(
+            for &slice_index in &slice_indices_owned {
+                let mut plane_result = run_single_plane_forward_at_slice(
                     &sessions_worker,
                     &volume_worker,
                     plane_value,
                     slice_index,
                 )?;
-
-                let plane_result =
-                    remap_if_sagittal(plane_value, plane_result)?;
+                plane_result = remap_if_sagittal(plane_value, plane_result)?;
 
                 if tx_clone
                     .send(Ok((plane_value, weight_value, plane_result)))
@@ -603,34 +594,28 @@ where
             Ok::<(), String>(())
         }));
     }
+
     drop(tx);
 
     while let Some(msg) = rt.block_on(rx.recv()) {
-        if should_cancel() {
+        if (ctx.should_cancel)() {
             return Err(cancelled_error());
         }
-
         let (plane, weight, plane_result) = msg?;
-
-        if plane_result.slice_index == 0
-            || plane_first_summaries
-                .iter()
-                .all(|s| !s.contains(plane.as_str()))
-        {
-            plane_first_summaries.push(plane_result.summary.clone());
-        }
-
+        let mut pr_ctx = PlaneResultContext {
+            sampled_lookup: ctx.sampled_lookup,
+            volume_shape_xyz: volume.shape_xyz,
+            class_count: sessions.class_count_or_default(),
+            plane_first_summaries: ctx.plane_first_summaries,
+            on_progress: ctx.on_progress,
+        };
         handle_plane_result(
-            merged_logits,
+            ctx.merged_logits,
             &plane_result,
             plane,
             weight,
-            sparse_mode,
-            sampled_lookup,
-            volume.shape_xyz,
-            sessions.class_count_or_default(),
-            plane_first_summaries,
-            on_progress,
+            ctx.sparse_mode,
+            &mut pr_ctx,
         )?;
     }
 
@@ -641,66 +626,52 @@ where
     Ok(())
 }
 
-fn execute_forward_pass_sequential<F>(
+fn execute_forward_pass_sequential(
     _rt: &tokio::runtime::Handle,
     sessions: &NativeOnnxSessions,
     volume: &InputVolume,
     plane_specs: &[(InferencePlane, &[usize], usize, f32)],
-    sparse_mode: bool,
-    sampled_lookup: &HashMap<usize, usize>,
-    merged_logits: &mut [f32],
-    _total_slices: usize,
-    should_cancel: &dyn Fn() -> bool,
-    on_progress: &mut F,
-    plane_first_summaries: &mut Vec<String>,
-) -> Result<(), String>
-where
-    F: FnMut(u8, String),
-{
-    for (plane, slice_indices, _channels, weight) in plane_specs.iter() {
-        if should_cancel() {
-            return Err(cancelled_error());
-        }
-
-        if slice_indices.is_empty() {
-            continue;
-        }
-
-        on_progress(
+    ctx: &mut ForwardPassContext,
+) -> Result<(), String> {
+    for &(plane, slice_indices, _channels, weight) in plane_specs {
+        (ctx.on_progress)(
             5,
             format!("Running {} plane ONNX forward passes...", plane.as_str()),
         );
 
         for (position, slice_index) in slice_indices.iter().copied().enumerate()
         {
-            if should_cancel() {
+            if (ctx.should_cancel)() {
                 return Err(cancelled_error());
             }
 
             let mut plane_result = run_single_plane_forward_at_slice(
                 sessions,
-                &volume,
-                *plane,
+                volume,
+                plane,
                 slice_index,
             )?;
 
-            plane_result = remap_if_sagittal(*plane, plane_result)?;
+            plane_result = remap_if_sagittal(plane, plane_result)?;
 
             if position == 0 {
-                plane_first_summaries.push(plane_result.summary.clone());
+                ctx.plane_first_summaries.push(plane_result.summary.clone());
             }
 
+            let mut pr_ctx = PlaneResultContext {
+                sampled_lookup: ctx.sampled_lookup,
+                volume_shape_xyz: volume.shape_xyz,
+                class_count: sessions.class_count_or_default(),
+                plane_first_summaries: ctx.plane_first_summaries,
+                on_progress: ctx.on_progress,
+            };
             handle_plane_result(
-                merged_logits,
+                ctx.merged_logits,
                 &plane_result,
-                *plane,
-                *weight,
-                sparse_mode,
-                sampled_lookup,
-                volume.shape_xyz,
-                sessions.class_count_or_default(),
-                plane_first_summaries,
-                on_progress,
+                plane,
+                weight,
+                ctx.sparse_mode,
+                &mut pr_ctx,
             )?;
         }
     }
@@ -708,27 +679,29 @@ where
     Ok(())
 }
 
-fn handle_plane_result<F>(
+struct PlaneResultContext<'a> {
+    sampled_lookup: &'a HashMap<usize, usize>,
+    volume_shape_xyz: [usize; 3],
+    class_count: usize,
+    plane_first_summaries: &'a mut Vec<String>,
+    on_progress: &'a mut dyn FnMut(u8, String),
+}
+
+fn handle_plane_result(
     merged_logits: &mut [f32],
     plane_result: &PlaneForwardResult,
     plane: InferencePlane,
     weight: f32,
     sparse_mode: bool,
-    sampled_lookup: &HashMap<usize, usize>,
-    volume_shape_xyz: [usize; 3],
-    class_count: usize,
-    plane_first_summaries: &mut Vec<String>,
-    on_progress: &mut F,
-) -> Result<(), String>
-where
-    F: FnMut(u8, String),
-{
+    ctx: &mut PlaneResultContext,
+) -> Result<(), String> {
     if plane_result.slice_index == 0
-        || plane_first_summaries
+        || ctx
+            .plane_first_summaries
             .iter()
             .all(|s| !s.contains(plane.as_str()))
     {
-        plane_first_summaries.push(plane_result.summary.clone());
+        ctx.plane_first_summaries.push(plane_result.summary.clone());
     }
 
     if sparse_mode {
@@ -736,23 +709,23 @@ where
             merged_logits,
             plane_result,
             plane,
-            volume_shape_xyz,
+            ctx.volume_shape_xyz,
             weight,
-            class_count,
-            sampled_lookup,
+            ctx.class_count,
+            ctx.sampled_lookup,
         )?;
     } else {
         merge_plane_logits_into_volume(
             merged_logits,
             plane_result,
             plane,
-            volume_shape_xyz,
+            ctx.volume_shape_xyz,
             weight,
-            class_count,
+            ctx.class_count,
         )?;
     }
 
-    on_progress(
+    (ctx.on_progress)(
         5,
         format!("Aggregating progress... slice {}", plane_result.slice_index),
     );
@@ -1102,10 +1075,7 @@ fn argmax_labels_from_logits(
             }
         }
         labels[voxel] = u16::try_from(best_class).map_err(|_| {
-            format!(
-                "Predicted class index {} cannot be cast to u16",
-                best_class
-            )
+            format!("Predicted class index {best_class} cannot be cast to u16")
         })?;
         class_hist[best_class] += 1;
     }
@@ -1463,16 +1433,20 @@ where
         &rt,
         sessions,
         &volume,
-        &coronal_indices,
-        &sagittal_indices,
-        &axial_indices,
-        coronal_channels,
-        sagittal_channels,
-        axial_channels,
+        &PlaneSampling {
+            coronal_indices: &coronal_indices,
+            sagittal_indices: &sagittal_indices,
+            axial_indices: &axial_indices,
+            coronal_channels,
+            sagittal_channels,
+            axial_channels,
+        },
         class_count,
         sparse_mode,
-        should_cancel,
-        &mut on_progress,
+        &mut ForwardCallbacks {
+            should_cancel,
+            on_progress: &mut on_progress as &mut dyn FnMut(u8, String),
+        },
     )?;
 
     if should_cancel() {
@@ -1490,44 +1464,63 @@ where
     )?;
 
     finalize_native_result(
-        &volume,
-        &label_indices_xyz,
-        &class_hist,
-        &plane_first_summaries,
-        sessions,
-        lut_ids,
-        input_path,
-        on_progress,
+        &FinalizeNativeResultInput {
+            volume: &volume,
+            label_indices_xyz: &label_indices_xyz,
+            class_hist: &class_hist,
+            plane_first_summaries: &plane_first_summaries,
+            sessions,
+            lut_ids,
+            input_path,
+        },
+        &mut on_progress,
     )
 }
 
-fn run_forward_and_merge<F>(
-    rt: &tokio::runtime::Handle,
-    sessions: &NativeOnnxSessions,
-    volume: &InputVolume,
-    coronal_indices: &[usize],
-    sagittal_indices: &[usize],
-    axial_indices: &[usize],
+type ForwardMergeResult = (
+    Vec<f32>,
+    Vec<usize>,
+    HashMap<usize, usize>,
+    usize,
+    Vec<String>,
+);
+
+struct PlaneSampling<'a> {
+    coronal_indices: &'a [usize],
+    sagittal_indices: &'a [usize],
+    axial_indices: &'a [usize],
     coronal_channels: usize,
     sagittal_channels: usize,
     axial_channels: usize,
+}
+
+struct ForwardCallbacks<'a> {
+    should_cancel: &'a dyn Fn() -> bool,
+    on_progress: &'a mut dyn FnMut(u8, String),
+}
+
+fn run_forward_and_merge(
+    rt: &tokio::runtime::Handle,
+    sessions: &NativeOnnxSessions,
+    volume: &InputVolume,
+    plane_sampling: &PlaneSampling<'_>,
     class_count: usize,
     sparse_mode: bool,
-    should_cancel: &dyn Fn() -> bool,
-    on_progress: &mut F,
-) -> Result<
-    (
-        Vec<f32>,
-        Vec<usize>,
-        HashMap<usize, usize>,
-        usize,
-        Vec<String>,
-    ),
-    String,
->
-where
-    F: FnMut(u8, String),
-{
+    callbacks: &mut ForwardCallbacks<'_>,
+) -> Result<ForwardMergeResult, String> {
+    let PlaneSampling {
+        coronal_indices,
+        sagittal_indices,
+        axial_indices,
+        coronal_channels,
+        sagittal_channels,
+        axial_channels,
+    } = *plane_sampling;
+    let ForwardCallbacks {
+        should_cancel,
+        on_progress,
+    } = callbacks;
+
     let (sampled_order, sampled_lookup) = if sparse_mode {
         build_sampled_lookup(
             volume,
@@ -1538,7 +1531,6 @@ where
     } else {
         (Vec::<usize>::new(), HashMap::<usize, usize>::new())
     };
-
     let [sx, sy, sz] = volume.shape_xyz;
     let voxels = sx * sy * sz;
     let sampled_voxels = if sparse_mode {
@@ -1546,7 +1538,6 @@ where
     } else {
         voxels
     };
-
     let mut merged_logits = vec![0f32; class_count * sampled_voxels];
     let mut plane_first_summaries: Vec<String> = Vec::new();
 
@@ -1566,18 +1557,23 @@ where
         (InferencePlane::Axial, axial_indices, axial_channels, 0.4f32),
     ];
 
+    let mut forward_ctx = ForwardPassContext {
+        sparse_mode,
+        sampled_lookup: &sampled_lookup,
+        merged_logits: &mut merged_logits,
+        should_cancel,
+        on_progress: *on_progress,
+        plane_first_summaries: &mut plane_first_summaries,
+    };
+
     execute_forward_pass(
         rt,
-        sessions,
-        volume,
-        &plane_specs_vec,
-        sparse_mode,
-        &sampled_lookup,
-        &mut merged_logits,
-        plane_specs_vec.iter().map(|(_, v, _, _)| v.len()).sum(),
-        should_cancel,
-        on_progress,
-        &mut plane_first_summaries,
+        &ForwardPassRequest {
+            sessions,
+            volume,
+            plane_specs: &plane_specs_vec,
+        },
+        &mut forward_ctx,
     )?;
 
     Ok((
@@ -1668,27 +1664,16 @@ pub(crate) fn run_native_inference(
     })
 }
 
-pub(crate) fn run_native_inference_with_progress<R: tauri::Runtime>(
+fn load_runtime_dependencies<R: tauri::Runtime>(
     app_handle: &tauri::AppHandle<R>,
-    cancelled_tasks: &Arc<Mutex<BTreeSet<String>>>,
     task_id: &str,
     file_paths: &[String],
     folder_paths: &[String],
-) -> Result<ProcessingRunResult, String> {
+) -> Result<(Vec<String>, NativeOnnxSessions, Vec<u16>), String> {
     let requested_paths = match validate_inputs(file_paths, folder_paths) {
         Ok(paths) => paths,
         Err(error) => {
-            emit_inference_progress(
-                app_handle,
-                task_id,
-                "failed",
-                error.clone(),
-                0,
-                0,
-                0,
-                None,
-                None,
-            );
+            emit_failed_progress(app_handle, task_id, 0, 0, error.clone());
             return Err(error);
         }
     };
@@ -1697,32 +1682,24 @@ pub(crate) fn run_native_inference_with_progress<R: tauri::Runtime>(
     emit_inference_progress(
         app_handle,
         task_id,
-        "started",
-        format!(
-            "Rust ONNX mode selected (runtime={}). Initializing ONNX sessions...",
-            resolve_native_onnx_runtime().as_str()
-        ),
-        total,
-        0,
-        0,
-        None,
-        None,
+        ProgressUpdate {
+            status: "started",
+            message: format!(
+                "Rust ONNX mode selected (runtime={}). Initializing ONNX sessions...",
+                resolve_native_onnx_runtime().as_str()
+            ),
+            total,
+            completed: 0,
+            progress: 0,
+            current_path: None,
+            output_path: None,
+        },
     );
 
     let sessions = match NativeOnnxSessions::load_default() {
         Ok(sessions) => sessions,
         Err(error) => {
-            emit_inference_progress(
-                app_handle,
-                task_id,
-                "failed",
-                error.clone(),
-                total,
-                0,
-                0,
-                None,
-                None,
-            );
+            emit_failed_progress(app_handle, task_id, total, 0, error.clone());
             return Err(error);
         }
     };
@@ -1730,34 +1707,45 @@ pub(crate) fn run_native_inference_with_progress<R: tauri::Runtime>(
     let lut_ids = match load_lut_ids() {
         Ok(ids) => ids,
         Err(error) => {
-            emit_inference_progress(
-                app_handle,
-                task_id,
-                "failed",
-                error.clone(),
-                total,
-                0,
-                0,
-                None,
-                None,
-            );
+            emit_failed_progress(app_handle, task_id, total, 0, error.clone());
             return Err(error);
         }
     };
+
+    Ok((requested_paths, sessions, lut_ids))
+}
+
+pub(crate) fn run_native_inference_with_progress<R: tauri::Runtime>(
+    app_handle: &tauri::AppHandle<R>,
+    cancelled_tasks: &Arc<Mutex<BTreeSet<String>>>,
+    task_id: &str,
+    file_paths: &[String],
+    folder_paths: &[String],
+) -> Result<ProcessingRunResult, String> {
+    let (requested_paths, sessions, lut_ids) = load_runtime_dependencies(
+        app_handle,
+        task_id,
+        file_paths,
+        folder_paths,
+    )?;
+
+    let total = requested_paths.len();
 
     let mut results = Vec::with_capacity(total);
     let mut result_directories = BTreeSet::new();
     let mut qc_summaries = Vec::new();
     for (index, input_path) in requested_paths.iter().enumerate() {
         let single = process_single_input(
-            app_handle,
-            cancelled_tasks,
-            task_id,
-            &sessions,
-            &lut_ids,
+            &SingleInputContext {
+                app_handle,
+                cancelled_tasks,
+                task_id,
+                sessions: &sessions,
+                lut_ids: &lut_ids,
+                index,
+                total,
+            },
             input_path,
-            index,
-            total,
         )?;
 
         let completed = index + 1;
@@ -1775,13 +1763,15 @@ pub(crate) fn run_native_inference_with_progress<R: tauri::Runtime>(
         emit_inference_progress(
             app_handle,
             task_id,
-            "item_completed",
-            format!("Processed {completed}/{total}"),
-            total,
-            completed,
-            progress,
-            Some(input_path.clone()),
-            Some(output_path),
+            ProgressUpdate {
+                status: "item_completed",
+                message: format!("Processed {completed}/{total}"),
+                total,
+                completed,
+                progress,
+                current_path: Some(input_path.clone()),
+                output_path: Some(output_path),
+            },
         );
     }
 
@@ -1804,13 +1794,15 @@ pub(crate) fn run_native_inference_with_progress<R: tauri::Runtime>(
     emit_inference_progress(
         app_handle,
         task_id,
-        "completed",
-        ack_message.clone(),
-        total,
-        total,
-        100,
-        None,
-        None,
+        ProgressUpdate {
+            status: "completed",
+            message: ack_message.clone(),
+            total,
+            completed: total,
+            progress: 100,
+            current_path: None,
+            output_path: None,
+        },
     );
 
     Ok(ProcessingRunResult {
@@ -1822,17 +1814,120 @@ pub(crate) fn run_native_inference_with_progress<R: tauri::Runtime>(
     })
 }
 
-fn emit_inference_progress<R: tauri::Runtime>(
-    app_handle: &tauri::AppHandle<R>,
-    task_id: &str,
-    status: &str,
+struct ProgressUpdate<'a> {
+    status: &'a str,
     message: String,
     total: usize,
     completed: usize,
     progress: u8,
     current_path: Option<String>,
     output_path: Option<String>,
+}
+
+fn emit_failed_progress<R: tauri::Runtime>(
+    app_handle: &tauri::AppHandle<R>,
+    task_id: &str,
+    total: usize,
+    completed: usize,
+    message: String,
 ) {
+    emit_inference_progress(
+        app_handle,
+        task_id,
+        ProgressUpdate {
+            status: "failed",
+            message,
+            total,
+            completed,
+            progress: progress_for_completed(total, completed, 100),
+            current_path: None,
+            output_path: None,
+        },
+    );
+}
+
+fn progress_for_completed(total: usize, completed: usize, fallback: u8) -> u8 {
+    if total == 0 {
+        fallback
+    } else {
+        let value = ((completed * 100) / total).min(100);
+        u8::try_from(value).unwrap_or(100)
+    }
+}
+
+fn remove_cancelled_task(
+    cancelled_tasks: &Arc<Mutex<BTreeSet<String>>>,
+    task_id: &str,
+) {
+    if let Ok(mut cancelled) = cancelled_tasks.lock() {
+        cancelled.remove(task_id);
+    }
+}
+
+fn emit_single_input_status<R: tauri::Runtime>(
+    ctx: &SingleInputContext<'_, R>,
+    input_path: &str,
+    status: &'static str,
+    message: String,
+    progress: u8,
+) {
+    emit_inference_progress(
+        ctx.app_handle,
+        ctx.task_id,
+        ProgressUpdate {
+            status,
+            message,
+            total: ctx.total,
+            completed: ctx.index,
+            progress,
+            current_path: Some(input_path.to_string()),
+            output_path: None,
+        },
+    );
+}
+
+fn emit_cancelled_single_input<R: tauri::Runtime>(
+    ctx: &SingleInputContext<'_, R>,
+    input_path: &str,
+) {
+    emit_single_input_status(
+        ctx,
+        input_path,
+        "cancelled",
+        NATIVE_CANCELLED_MESSAGE.to_string(),
+        progress_for_completed(ctx.total, ctx.index, 0),
+    );
+}
+
+fn emit_failed_single_input<R: tauri::Runtime>(
+    ctx: &SingleInputContext<'_, R>,
+    input_path: &str,
+    message: String,
+) {
+    emit_single_input_status(
+        ctx,
+        input_path,
+        "failed",
+        message,
+        progress_for_completed(ctx.total, ctx.index, 0),
+    );
+}
+
+fn emit_inference_progress<R: tauri::Runtime>(
+    app_handle: &tauri::AppHandle<R>,
+    task_id: &str,
+    update: ProgressUpdate<'_>,
+) {
+    let ProgressUpdate {
+        status,
+        message,
+        total,
+        completed,
+        progress,
+        current_path,
+        output_path,
+    } = update;
+
     let _ = app_handle.emit(
         "fastsurfer://inference-progress",
         InferenceProgressEvent {
@@ -1848,70 +1943,60 @@ fn emit_inference_progress<R: tauri::Runtime>(
     );
 }
 
-fn process_single_input<R: tauri::Runtime>(
-    app_handle: &tauri::AppHandle<R>,
-    cancelled_tasks: &Arc<Mutex<BTreeSet<String>>>,
-    task_id: &str,
-    sessions: &NativeOnnxSessions,
-    lut_ids: &[u16],
-    input_path: &str,
+struct SingleInputContext<'a, R: tauri::Runtime> {
+    app_handle: &'a tauri::AppHandle<R>,
+    cancelled_tasks: &'a Arc<Mutex<BTreeSet<String>>>,
+    task_id: &'a str,
+    sessions: &'a NativeOnnxSessions,
+    lut_ids: &'a [u16],
     index: usize,
     total: usize,
+}
+
+fn process_single_input<R: tauri::Runtime>(
+    ctx: &SingleInputContext<'_, R>,
+    input_path: &str,
 ) -> Result<NativeSingleResult, String> {
-    if is_task_cancelled(cancelled_tasks, task_id)? {
-        emit_inference_progress(
-            app_handle,
-            task_id,
-            "cancelled",
-            NATIVE_CANCELLED_MESSAGE.to_string(),
-            total,
-            index,
-            if total == 0 {
-                0u8
-            } else {
-                let v = ((index * 100) / total).min(100);
-                u8::try_from(v).unwrap_or(100u8)
-            },
-            Some(input_path.to_string()),
-            None,
-        );
-        if let Ok(mut cancelled) = cancelled_tasks.lock() {
-            cancelled.remove(task_id);
-        }
+    if is_task_cancelled(ctx.cancelled_tasks, ctx.task_id)? {
+        emit_cancelled_single_input(ctx, input_path);
+        remove_cancelled_task(ctx.cancelled_tasks, ctx.task_id);
         return Err(cancelled_error());
     }
 
     let should_cancel = || {
-        cancelled_tasks
+        ctx.cancelled_tasks
             .lock()
-            .map(|set| set.contains(task_id))
+            .map(|set| set.contains(ctx.task_id))
             .unwrap_or(false)
     };
 
     let single = run_native_single_path(
-        sessions,
-        lut_ids,
+        ctx.sessions,
+        ctx.lut_ids,
         input_path,
         &should_cancel,
         |file_progress, file_message| {
-            let overall_progress = if total == 0 {
+            let overall_progress = if ctx.total == 0 {
                 file_progress
             } else {
-                let v =
-                    (((index * 100) + file_progress as usize) / total).min(99);
+                let v = (((ctx.index * 100) + file_progress as usize)
+                    / ctx.total)
+                    .min(99);
                 u8::try_from(v).unwrap_or(99u8)
             };
 
             emit_inference_progress(
-                app_handle,
-                task_id,
-                "item_progress",
-                file_message,
-                total,
-                index,
-                overall_progress,
-                Some(input_path.to_string()),
-                None,
+                ctx.app_handle,
+                ctx.task_id,
+                ProgressUpdate {
+                    status: "item_progress",
+                    message: file_message,
+                    total: ctx.total,
+                    completed: ctx.index,
+                    progress: overall_progress,
+                    current_path: Some(input_path.to_string()),
+                    output_path: None,
+                },
             );
         },
     );
@@ -1920,49 +2005,16 @@ fn process_single_input<R: tauri::Runtime>(
         Ok(single) => Ok(single),
         Err(error) => {
             let was_cancelled = error == NATIVE_CANCELLED_MESSAGE
-                || is_task_cancelled(cancelled_tasks, task_id)?;
+                || is_task_cancelled(ctx.cancelled_tasks, ctx.task_id)?;
 
             if was_cancelled {
-                emit_inference_progress(
-                    app_handle,
-                    task_id,
-                    "cancelled",
-                    NATIVE_CANCELLED_MESSAGE.to_string(),
-                    total,
-                    index,
-                    if total == 0 {
-                        0
-                    } else {
-                        u8::try_from(((index * 100) / total).min(100))
-                            .unwrap_or(100)
-                    },
-                    Some(input_path.to_string()),
-                    None,
-                );
-
-                if let Ok(mut cancelled) = cancelled_tasks.lock() {
-                    cancelled.remove(task_id);
-                }
+                emit_cancelled_single_input(ctx, input_path);
+                remove_cancelled_task(ctx.cancelled_tasks, ctx.task_id);
 
                 return Err(cancelled_error());
             }
 
-            emit_inference_progress(
-                app_handle,
-                task_id,
-                "failed",
-                error.clone(),
-                total,
-                index,
-                if total == 0 {
-                    0
-                } else {
-                    u8::try_from(((index * 100) / total).min(100))
-                        .unwrap_or(100)
-                },
-                Some(input_path.to_string()),
-                None,
-            );
+            emit_failed_single_input(ctx, input_path, error.clone());
 
             Err(error)
         }

@@ -74,17 +74,20 @@ fn progress_callback_should_ignore_non_progress_events() {
 
 #[test]
 fn progress_callback_should_handle_rapid_progress_updates() {
+    use std::fmt::Write as _;
+
     let mut rapid_updates = String::new();
     for i in 1..=10 {
         let progress = i * 10;
-        rapid_updates.push_str(&format!(
-            "printf '%s\\n' '{{\"event\":\"progress\",\"progress\":{},\"message\":\"Update {}\"}}'; ",
-            progress, i
-        ));
+        write!(
+            rapid_updates,
+            "printf '%s\\n' '{{\"event\":\"progress\",\"progress\":{progress},\"message\":\"Update {i}\"}}'; "
+        )
+        .expect("writing progress update should succeed");
     }
     rapid_updates.push_str("printf '%s\\n' '{\"ok\":true,\"result\":{\"output_path\":\"/tmp/out.mgz\",\"output_filename\":\"out.mgz\",\"run_result\":\"ok\"}}'; ");
 
-    let script = format!("while IFS= read -r _line; do {}done", rapid_updates);
+    let script = format!("while IFS= read -r _line; do {rapid_updates}done");
 
     let backend = create_backend_state_via_shell_script(&script);
 

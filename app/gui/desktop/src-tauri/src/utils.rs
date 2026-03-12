@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 ///
 /// # Returns
 /// An `Option<PathBuf>` containing the first valid path found, or `None` if none exist.
+#[must_use]
 pub fn first_existing_path(base: &Path, suffixes: &[&str]) -> Option<PathBuf> {
     suffixes
         .iter()

@@ -1,12 +1,10 @@
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use fastsurfer_desktop_lib::inference::{
+    onnx_loader_candle as onnx_loader, preprocess,
+};
 use std::fs;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
-
-#[path = "../src/inference/onnx_loader_candle.rs"]
-mod onnx_loader;
-#[path = "../src/inference/preprocess.rs"]
-mod preprocess;
 
 fn find_repo_root() -> Option<PathBuf> {
     let mut candidates = vec![PathBuf::from(env!("CARGO_MANIFEST_DIR"))];
@@ -41,19 +39,8 @@ fn vm_rss_kb() -> Option<u64> {
     None
 }
 
-fn faults() -> Option<(i64, i64)> {
-    let mut usage = std::mem::MaybeUninit::<libc::rusage>::uninit();
-    let rc = unsafe { libc::getrusage(libc::RUSAGE_SELF, usage.as_mut_ptr()) };
-    if rc != 0 {
-        return None;
-    }
-    let usage = unsafe { usage.assume_init() };
-    Some((usage.ru_minflt, usage.ru_majflt))
-}
-
-fn channel_count_from_shape(shape: &Option<Vec<usize>>) -> usize {
+fn channel_count_from_shape(shape: Option<&[usize]>) -> usize {
     shape
-        .as_ref()
         .and_then(|dims| dims.get(1).copied())
         .filter(|channels| *channels > 0)
         .unwrap_or(7)
@@ -90,16 +77,15 @@ fn prepare_state() -> Result<BenchState, String> {
         ));
     }
 
-    unsafe {
-        std::env::set_var(
-            "FASTSURFER_REPO_ROOT",
-            repo_root.to_string_lossy().to_string(),
+    if std::env::var("FASTSURFER_REPO_ROOT").is_err() {
+        eprintln!(
+            "[bench] FASTSURFER_REPO_ROOT is not set; relying on loader directory discovery"
         );
-        std::env::set_var("FASTSURFER_NATIVE_TRACE_TIMING", "0");
-        std::env::remove_var("FASTSURFER_NATIVE_PLANE_TIMEOUT_SECS");
-        if std::env::var("FASTSURFER_NATIVE_CPU_THREADS").is_err() {
-            std::env::set_var("FASTSURFER_NATIVE_CPU_THREADS", "16");
-        }
+    }
+    if std::env::var("FASTSURFER_NATIVE_TRACE_TIMING").is_err() {
+        eprintln!(
+            "[bench] FASTSURFER_NATIVE_TRACE_TIMING is not set; benchmark uses current environment"
+        );
     }
 
     let sessions = onnx_loader::NativeOnnxSessions::load_default()?;
@@ -119,6 +105,87 @@ fn prepare_state() -> Result<BenchState, String> {
     })
 }
 
+fn run_forward_bench(
+    c: &mut Criterion,
+    state: &BenchState,
+    coronal_channels: usize,
+) {
+    let rss0 = vm_rss_kb();
+    let warmup = preprocess::prepare_plane_input_for_slice(
+        &state.volume,
+        preprocess::InferencePlane::Coronal,
+        coronal_channels,
+        1.0,
+        state.coronal_slice,
+    )
+    .and_then(|prepared| {
+        state.sessions.coronal.run(
+            prepared.tensor_shape.as_slice(),
+            prepared.tensor_data.as_slice(),
+            prepared.scale_factor,
+            "coronal",
+        )
+    });
+    if let Err(error) = warmup {
+        eprintln!(
+            "[bench] forward warmup failed (skipping forward bench): {error}"
+        );
+        return;
+    }
+
+    let rss1 = vm_rss_kb();
+    if let (Some(before), Some(after)) = (rss0, rss1) {
+        let delta = i128::from(after) - i128::from(before);
+        eprintln!("[bench] VmRSS delta (forward warmup): {delta} kB");
+    }
+
+    let mut forward_group = c.benchmark_group("native_forward_candle");
+    forward_group.measurement_time(Duration::from_secs(10));
+    forward_group.sample_size(10);
+    forward_group.bench_function("coronal_center_slice", |b| {
+        b.iter_custom(|iters| {
+            let effective = 1_u64;
+            let start = Instant::now();
+            for _ in 0..effective {
+                let prepared = preprocess::prepare_plane_input_for_slice(
+                    &state.volume,
+                    preprocess::InferencePlane::Coronal,
+                    coronal_channels,
+                    1.0,
+                    state.coronal_slice,
+                )
+                .expect("preprocess should succeed");
+                let run = state
+                    .sessions
+                    .coronal
+                    .run(
+                        prepared.tensor_shape.as_slice(),
+                        prepared.tensor_data.as_slice(),
+                        prepared.scale_factor,
+                        "coronal",
+                    )
+                    .expect("candle forward should succeed");
+                black_box(run.shape_chw);
+                black_box(run.logits.len());
+            }
+            let elapsed = start.elapsed();
+            if iters > effective {
+                let scale = f64::from(
+                    u32::try_from(iters)
+                        .expect("bench iters should fit into u32"),
+                ) / f64::from(
+                    u32::try_from(effective)
+                        .expect("effective should fit into u32"),
+                );
+                Duration::from_secs_f64(elapsed.as_secs_f64() * scale)
+            } else {
+                elapsed
+            }
+        });
+    });
+    forward_group.finish();
+}
+
 fn bench_preprocess_and_forward(c: &mut Criterion) {
     let state = match prepare_state() {
         Ok(state) => state,
@@ -129,7 +196,7 @@ fn bench_preprocess_and_forward(c: &mut Criterion) {
     };
 
     let coronal_channels =
-        channel_count_from_shape(&state.sessions.coronal.input_shape);
+        channel_count_from_shape(state.sessions.coronal.input_shape.as_deref());
 
     let mut load_group = c.benchmark_group("native_model_load");
     load_group.measurement_time(Duration::from_secs(6));
@@ -139,7 +206,7 @@ fn bench_preprocess_and_forward(c: &mut Criterion) {
             let sessions = onnx_loader::NativeOnnxSessions::load_default()
                 .expect("native onnx session load should succeed");
             black_box(sessions.coronal.input_shape.clone());
-        })
+        });
     });
     load_group.finish();
 
@@ -159,94 +226,12 @@ fn bench_preprocess_and_forward(c: &mut Criterion) {
             black_box(prepared.tensor_shape);
             black_box(prepared.scale_factor);
             black_box(prepared.tensor_data.len());
-        })
+        });
     });
     preprocess_group.finish();
 
     if bench_forward_enabled() {
-        unsafe {
-            std::env::set_var("FASTSURFER_NATIVE_PLANE_TIMEOUT_SECS", "10");
-        }
-
-        let rss0 = vm_rss_kb();
-        let faults0 = faults();
-        let warmup = preprocess::prepare_plane_input_for_slice(
-            &state.volume,
-            preprocess::InferencePlane::Coronal,
-            coronal_channels,
-            1.0,
-            state.coronal_slice,
-        )
-        .and_then(|prepared| {
-            state.sessions.coronal.run(
-                prepared.tensor_shape.as_slice(),
-                prepared.tensor_data.as_slice(),
-                prepared.scale_factor,
-                "coronal",
-            )
-        });
-        if let Err(error) = warmup {
-            eprintln!(
-                "[bench] forward warmup failed (skipping forward bench): {error}"
-            );
-            return;
-        }
-
-        let rss1 = vm_rss_kb();
-        let faults1 = faults();
-        if let (Some(before), Some(after)) = (rss0, rss1) {
-            eprintln!(
-                "[bench] VmRSS delta (forward warmup): {} kB",
-                (after as i64) - (before as i64)
-            );
-        }
-        if let (Some((min0, maj0)), Some((min1, maj1))) = (faults0, faults1) {
-            eprintln!(
-                "[bench] fault delta (forward warmup): minor={} major={}",
-                min1 - min0,
-                maj1 - maj0
-            );
-        }
-
-        let mut forward_group = c.benchmark_group("native_forward_candle");
-        forward_group.measurement_time(Duration::from_secs(10));
-        forward_group.sample_size(10);
-        forward_group.bench_function("coronal_center_slice", |b| {
-            b.iter_custom(|iters| {
-                let effective = iters.max(1).min(1);
-                let start = Instant::now();
-                for _ in 0..effective {
-                    let prepared = preprocess::prepare_plane_input_for_slice(
-                        &state.volume,
-                        preprocess::InferencePlane::Coronal,
-                        coronal_channels,
-                        1.0,
-                        state.coronal_slice,
-                    )
-                    .expect("preprocess should succeed");
-                    let run = state
-                        .sessions
-                        .coronal
-                        .run(
-                            prepared.tensor_shape.as_slice(),
-                            prepared.tensor_data.as_slice(),
-                            prepared.scale_factor,
-                            "coronal",
-                        )
-                        .expect("candle forward should succeed");
-                    black_box(run.shape_chw);
-                    black_box(run.logits.len());
-                }
-                let elapsed = start.elapsed();
-                if iters > effective {
-                    let scale = (iters as f64) / (effective as f64);
-                    Duration::from_secs_f64(elapsed.as_secs_f64() * scale)
-                } else {
-                    elapsed
-                }
-            })
-        });
-        forward_group.finish();
+        run_forward_bench(c, &state, coronal_channels);
     } else {
         eprintln!(
             "[bench] forward benchmark disabled by default. Set FASTSURFER_BENCH_FORWARD=1 to enable experimental forward profiling."

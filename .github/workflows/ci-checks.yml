@@ -1,0 +1,243 @@
+name: CI checks (format / lint / typecheck)
+
+on:
+  push:
+    branches: [ '**' ]
+  pull_request:
+    branches: [ '**' ]
+
+jobs:
+  # Python formatting / lint jobs
+  formatting:
+    name: Formatting checks
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: [3.10, 3.11]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install formatters
+        run: python -m pip install --upgrade pip black isort
+
+      - name: Black check
+        run: black --check .
+
+      - name: isort check
+        run: isort --check-only --profile=black .
+
+  lint:
+    name: Lint with ruff
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      - name: Install ruff
+        run: python -m pip install --upgrade pip ruff
+      - name: Run ruff
+        run: ruff check .
+
+  typecheck:
+    name: Type checking (mypy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      - name: Install mypy
+        run: python -m pip install --upgrade pip mypy
+      - name: Run mypy
+        run: mypy --ignore-missing-imports . || true
+
+  yamllint:
+    name: YAML lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      - name: Install yamllint
+        run: python -m pip install --upgrade pip yamllint
+      - name: Run yamllint
+        run: yamllint -c default . || true
+
+  trailing-whitespace:
+    name: Trailing whitespace check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check trailing whitespace in text files
+        run: |
+          set -e
+          found=0
+          while IFS= read -r -d '' file; do
+            if LC_ALL=C grep -nI --line-number -E "[[:blank:]]$" -- "$file"; then
+              found=1
+            fi
+          done < <(git ls-files -z)
+          if [ "$found" -eq 1 ]; then
+            echo "Trailing whitespace detected"; exit 1
+          fi
+
+  large-files:
+    name: Large file check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fail on tracked files larger than 10 MB
+        run: |
+          set -e
+          limit=10000000
+          while IFS= read -r -d '' f; do
+            size=$(stat -c%s "$f")
+            if [ "$size" -gt "$limit" ]; then
+              echo "Large file found: $f ($size bytes)"; exit 1
+            fi
+          done < <(git ls-files -z)
+
+  # Rust checks (format & clippy)
+  rust-lint:
+    name: Rust lint & format check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+
+      - name: Add rustfmt & clippy
+        run: |
+          rustup component add rustfmt clippy || true
+
+      - name: Cargo fmt --check
+        working-directory: app/gui/desktop/src-tauri
+        run: cargo fmt -- --check || (echo "Run `cargo fmt` locally to fix formatting" && exit 1)
+
+      - name: Cargo clippy (deny warnings)
+        working-directory: app/gui/desktop/src-tauri
+        run: cargo clippy -- -D warnings
+
+  # TypeScript / Svelte type-check
+  ts-typecheck:
+    name: TypeScript/Svelte type-check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Install dependencies
+        run: npm ci
+        working-directory: app/gui/simple-viewer
+
+      - name: Run tsc --noEmit
+        working-directory: app/gui/simple-viewer
+        run: npx tsc --noEmit
+
+  # Anti-mock scans changed files for forbidden mock imports/usages
+  anti-mock:
+    name: Anti-mock import scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Scan changed files for mock patterns
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "[3/4] Checking for forbidden mock imports..."
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BASE_SHA=${{ github.event.pull_request.base.sha }}
+            HEAD_SHA=${{ github.event.pull_request.head.sha }}
+          else
+            BASE_SHA=${{ github.event.before }}
+            HEAD_SHA=${{ github.sha }}
+          fi
+          if [ -z "$BASE_SHA" ] || [ -z "$HEAD_SHA" ]; then
+            FILES=$(git ls-files)
+          else
+            FILES=$(git diff --name-only "$BASE_SHA" "$HEAD_SHA")
+          fi
+          MOCK_PATTERNS=("import.*mock" "from.*mock" "use.*mock" "mock!" "mock(" "Mocking")
+          exit_code=0
+          while IFS= read -r file; do
+            [[ -z "$file" ]] && continue
+            if [[ "$file" =~ \.(ts|rs|py|svelte)$ ]]; then
+              for pat in "${MOCK_PATTERNS[@]}"; do
+                if grep -Ei "$pat" "$file" >/dev/null 2>&1; then
+                  echo "ERROR: Forbidden mock usage found in $file (pattern: $pat)"
+                  exit_code=1
+                fi
+              done
+            fi
+          done <<< "$FILES"
+          if [ "$exit_code" -ne 0 ]; then
+            echo "Mock import check failed"; exit 1
+          fi
+
+  # Ensure tests reference containers/testcontainers/docker
+  test-containers:
+    name: Test containers usage check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Ensure tests mention containers
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "[4/4] Ensuring tests use test containers..."
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BASE_SHA=${{ github.event.pull_request.base.sha }}
+            HEAD_SHA=${{ github.event.pull_request.head.sha }}
+          else
+            BASE_SHA=${{ github.event.before }}
+            HEAD_SHA=${{ github.sha }}
+          fi
+          if [ -z "$BASE_SHA" ] || [ -z "$HEAD_SHA" ]; then
+            FILES=$(git ls-files)
+          else
+            FILES=$(git diff --name-only "$BASE_SHA" "$HEAD_SHA")
+          fi
+          exit_code=0
+          while IFS= read -r file; do
+            [[ -z "$file" ]] && continue
+            if [[ "$file" =~ test.*\.(ts|rs|py)$ ]] || ([[ "$file" =~ \.(ts|rs|py)$ ]] && [[ "$file" == *"test"* ]]); then
+              if ! grep -Ei "(testcontainers|docker|container)" "$file" >/dev/null 2>&1; then
+                echo "ERROR: Test file $file does not seem to use containers."
+                exit_code=1
+              fi
+            fi
+          done <<< "$FILES"
+          if [ "$exit_code" -ne 0 ]; then
+            echo "Test container check failed"; exit 1
+          fi

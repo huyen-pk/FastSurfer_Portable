@@ -82,16 +82,17 @@ fn resolve_backend_launch_command_should_prefer_bundled_binary_when_available()
 #[test]
 fn run_fastsurfer_inference_with_unavailable_backend_should_return_clear_error()
 {
+    let input_paths = vec!["/in/a.nii.gz".to_string()];
+    let empty: Vec<String> = Vec::new();
     let result = run_fastsurfer_inference_with_app_state(
         None,
         Some("Could not resolve backend launch command"),
-        vec!["/in/a.nii.gz".to_string()],
-        vec![],
+        &input_paths,
+        &empty,
     );
 
-    let error = match result {
-        Ok(_) => panic!("expected unavailable backend to return an error"),
-        Err(error) => error,
+    let Err(error) = result else {
+        panic!("expected unavailable backend to return an error");
     };
     assert!(error.contains("Backend is unavailable in this desktop runtime"));
     assert!(error.contains("Could not resolve backend launch command"));

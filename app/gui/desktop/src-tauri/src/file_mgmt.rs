@@ -7,8 +7,10 @@ use std::process::Command;
 /// # Arguments
 /// * `result_path` - The string path provided by the user or backend.
 ///
-/// # Returns
-/// A canonical `PathBuf` if valid, or an error `String` if the path is invalid or inaccessible.
+/// # Errors
+/// Returns an error when the path is empty, does not exist, cannot be
+/// canonicalized, or cannot be accessed due to permission or filesystem
+/// issues.
 pub fn validate_result_path(result_path: &str) -> Result<PathBuf, String> {
     if result_path.trim().is_empty() {
         return Err("Path is empty".to_string());
@@ -74,6 +76,10 @@ pub fn validate_result_path(result_path: &str) -> Result<PathBuf, String> {
 ///
 /// # Arguments
 /// * `path` - The path to reveal or open.
+///
+/// # Errors
+/// Returns an error when the platform file manager command cannot be launched
+/// or exits unsuccessfully.
 pub fn open_in_file_manager(path: &Path) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
@@ -132,8 +138,12 @@ pub fn open_in_file_manager(path: &Path) -> Result<(), String> {
 
 /// Tauri command handler to open a result path in the file manager.
 #[tauri::command]
-pub fn open_result_in_file_manager(result_path: String) -> Result<(), String> {
-    let canonical_path = validate_result_path(&result_path)?;
+///
+/// # Errors
+/// Returns an error when the provided path is invalid or the system file
+/// manager cannot be launched for it.
+pub fn open_result_in_file_manager(result_path: &str) -> Result<(), String> {
+    let canonical_path = validate_result_path(result_path)?;
 
     open_in_file_manager(&canonical_path)
 }

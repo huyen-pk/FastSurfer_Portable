@@ -377,6 +377,66 @@ impl PlaneSession {
         ))
     }
 
+    fn build_inputs(
+        &self,
+        input_shape: &[usize],
+        input_data: &[f32],
+        scale_factor: [f32; 2],
+        plane: &str,
+    ) -> Result<Vec<(String, SessionInputValue<'static>)>, String> {
+        let input_tensor = Tensor::from_array((input_shape.to_vec(), input_data.to_vec()))
+            .map_err(|error| {
+                format!(
+                    "{plane}: failed to create ORT input tensor for shape {input_shape:?}: {error}"
+                )
+            })?;
+
+        let mut inputs: Vec<(String, SessionInputValue<'static>)> = Vec::new();
+        inputs.push((self.input_name.clone(), input_tensor.into()));
+
+        for required_name in &self.required_input_names {
+            if required_name == &self.input_name {
+                continue;
+            }
+
+            let lower = required_name.to_ascii_lowercase();
+            if lower.contains("scale") {
+                let aux_shape = self
+                    .required_input_shapes
+                    .get(required_name)
+                    .cloned()
+                    .flatten()
+                    .unwrap_or_else(|| vec![2usize]);
+
+                let actual_shape = if aux_shape.iter().product::<usize>() == 2 {
+                    aux_shape
+                } else {
+                    vec![2usize]
+                };
+
+                let aux_tensor = Tensor::from_array((
+                    actual_shape,
+                    vec![scale_factor[0], scale_factor[1]],
+                ))
+                .map_err(|error| {
+                    format!(
+                        "{plane}: failed to create ORT auxiliary input '{required_name}' tensor: {error}"
+                    )
+                })?;
+
+                inputs.push((required_name.clone(), aux_tensor.into()));
+                continue;
+            }
+
+            return Err(format!(
+                "{plane}: unsupported required auxiliary input '{required_name}' for model '{}'",
+                self.model_path
+            ));
+        }
+
+        Ok(inputs)
+    }
+
     pub(crate) fn run(
         &self,
         input_shape: &[usize],
@@ -396,55 +456,8 @@ impl PlaneSession {
                 input_shape
             ));
         }
-
-        let input_tensor = Tensor::from_array((input_shape.to_vec(), input_data.to_vec()))
-            .map_err(|error| {
-                format!(
-                    "{plane}: failed to create ORT input tensor for shape {:?}: {error}",
-                    input_shape
-                )
-            })?;
-
-        let mut inputs: Vec<(String, SessionInputValue<'_>)> = Vec::new();
-        inputs.push((self.input_name.clone(), input_tensor.into()));
-
-        for required_name in &self.required_input_names {
-            if required_name == &self.input_name {
-                continue;
-            }
-
-            let lower = required_name.to_ascii_lowercase();
-            if lower.contains("scale") {
-                let aux_shape = self
-                    .required_input_shapes
-                    .get(required_name)
-                    .and_then(|shape| shape.clone())
-                    .unwrap_or_else(|| vec![2usize]);
-
-                let expected_aux_len = aux_shape.iter().product::<usize>();
-                let fallback_aux_shape = vec![2usize];
-                let actual_shape = if expected_aux_len == 2 {
-                    aux_shape
-                } else {
-                    fallback_aux_shape
-                };
-
-                let aux_tensor = Tensor::from_array((actual_shape, vec![scale_factor[0], scale_factor[1]]))
-                    .map_err(|error| {
-                        format!(
-                            "{plane}: failed to create ORT auxiliary input '{required_name}' tensor: {error}"
-                        )
-                    })?;
-
-                inputs.push((required_name.clone(), aux_tensor.into()));
-                continue;
-            }
-
-            return Err(format!(
-                "{plane}: unsupported required auxiliary input '{required_name}' for model '{}'",
-                self.model_path
-            ));
-        }
+        let inputs =
+            self.build_inputs(input_shape, input_data, scale_factor, plane)?;
 
         let mut session = self
             .session
@@ -478,32 +491,8 @@ impl PlaneSession {
                 format!("{plane}: failed to extract f32 output tensor: {error}")
             })?;
 
-        let shape = shape
-            .iter()
-            .map(|dim| {
-                if *dim < 0 {
-                    Err(format!(
-                        "{plane}: dynamic output shape is not supported: {shape:?}"
-                    ))
-                } else {
-                    Ok(*dim as usize)
-                }
-            })
-            .collect::<Result<Vec<usize>, String>>()?;
-
-        if shape.len() != 4 {
-            return Err(format!(
-                "{plane}: output shape must be rank-4 [N,C,H,W], got {:?}",
-                shape
-            ));
-        }
-
-        if shape[0] != 1 {
-            return Err(format!(
-                "{plane}: output batch dimension must be 1, got {}",
-                shape[0]
-            ));
-        }
+        let shape = parse_ort_dims(shape.as_ref(), plane)?;
+        validate_rank4_shape(&shape, plane)?;
 
         let mut output_shapes = Vec::<Vec<usize>>::new();
         for name in &self.output_names {
@@ -512,7 +501,7 @@ impl PlaneSession {
             {
                 let parsed = dims
                     .iter()
-                    .map(|dim| if *dim < 0 { 0usize } else { *dim as usize })
+                    .map(|dim| usize::try_from(*dim).unwrap_or(0))
                     .collect::<Vec<usize>>();
                 output_shapes.push(parsed);
             }
@@ -524,6 +513,36 @@ impl PlaneSession {
             output_shapes,
         })
     }
+}
+
+fn validate_rank4_shape(shape: &[usize], plane: &str) -> Result<(), String> {
+    if shape.len() != 4 {
+        return Err(format!(
+            "{plane}: output shape must be rank-4 [N,C,H,W], got {shape:?}"
+        ));
+    }
+
+    if shape[0] != 1 {
+        return Err(format!(
+            "{plane}: output batch dimension must be 1, got {}",
+            shape[0]
+        ));
+    }
+
+    Ok(())
+}
+
+fn parse_ort_dims(shape: &[i64], plane: &str) -> Result<Vec<usize>, String> {
+    shape
+        .iter()
+        .map(|dim| {
+            usize::try_from(*dim).map_err(|_| {
+                format!(
+                    "{plane}: dynamic output shape is not supported: {shape:?}"
+                )
+            })
+        })
+        .collect::<Result<Vec<usize>, String>>()
 }
 
 fn load_runnable_model(
@@ -578,9 +597,8 @@ fn load_runnable_model(
         .find(|name| {
             required_input_shapes
                 .get(*name)
-                .and_then(|shape| shape.as_ref())
-                .map(|shape| shape.len() == 4)
-                .unwrap_or(false)
+                .and_then(Option::as_ref)
+                .is_some_and(|shape| shape.len() == 4)
         })
         .cloned()
         .or_else(|| required_input_names.first().cloned())
@@ -633,7 +651,7 @@ fn dims_from_value_type(dtype: &ValueType) -> Option<Vec<usize>> {
     match dtype {
         ValueType::Tensor { shape, .. } => shape
             .iter()
-            .map(|dim| if *dim < 0 { None } else { Some(*dim as usize) })
+            .map(|dim| usize::try_from(*dim).ok())
             .collect::<Option<Vec<usize>>>(),
         _ => None,
     }

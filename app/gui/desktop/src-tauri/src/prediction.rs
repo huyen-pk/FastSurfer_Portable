@@ -203,8 +203,7 @@ fn process_requested_paths(
                     u8::try_from(safe_file_progress).unwrap_or(100)
                 } else {
                     u8::try_from(
-                        ((((index * 100) + safe_file_progress) / total)
-                            .min(100)),
+                        (((index * 100) + safe_file_progress) / total).min(100),
                     )
                     .unwrap_or(100)
                 };
@@ -303,8 +302,8 @@ pub(crate) fn run_fastsurfer_inference_with_backend(
 pub(crate) fn run_fastsurfer_inference_with_app_state(
     backend: Option<&BackendState>,
     backend_init_error: Option<&str>,
-    file_paths: Vec<String>,
-    folder_paths: Vec<String>,
+    file_paths: &[String],
+    folder_paths: &[String],
 ) -> Result<ProcessingRunResult, String> {
     let backend = backend.ok_or_else(|| {
         let detail = backend_init_error
@@ -312,21 +311,25 @@ pub(crate) fn run_fastsurfer_inference_with_app_state(
         format!("Backend is unavailable in this desktop runtime: {detail}")
     })?;
 
-    run_fastsurfer_inference_with_backend(backend, &file_paths, &folder_paths)
+    run_fastsurfer_inference_with_backend(backend, file_paths, folder_paths)
 }
 
 /// Advanced inference runner that supports granular progress tracking and cancellation.
 ///
 /// Iterates through the requested items one by one, updating the UI via events.
 /// Handles user-initiated cancellation checks between items.
+///
+/// # Errors
+/// Returns an error when backend inference startup, per-item processing, or
+/// event-driven cancellation handling fails.
 pub fn run_fastsurfer_inference_with_progress_with_app_state(
     app_handle: &AppHandle,
     backend: Option<&BackendState>,
     backend_init_error: Option<&str>,
     cancelled_tasks: &Arc<Mutex<BTreeSet<String>>>,
     task_id: String,
-    file_paths: Vec<String>,
-    folder_paths: Vec<String>,
+    file_paths: &[String],
+    folder_paths: &[String],
 ) -> Result<ProcessingRunResult, String> {
     eprintln!(
         "[trace][prediction] run_with_progress task_id={} file_paths={} folder_paths={}",
@@ -337,7 +340,7 @@ pub fn run_fastsurfer_inference_with_progress_with_app_state(
     let backend = ensure_backend(backend, backend_init_error)?;
 
     let (start_ack_message, requested_paths): (String, Vec<String>) =
-        backend.start_predict_batch(&file_paths, &folder_paths)?;
+        backend.start_predict_batch(file_paths, folder_paths)?;
     let total = requested_paths.len();
 
     emit_started_event(app_handle, &task_id, &start_ack_message, total);
@@ -380,6 +383,10 @@ pub fn run_fastsurfer_inference_with_progress_with_app_state(
 
 /// Legacy command for simple batch inference (no progress events).
 #[tauri::command]
+///
+/// # Errors
+/// Returns an error when native or backend inference fails, or when the
+/// blocking worker task cannot be joined.
 pub async fn run_fastsurfer_inference(
     app_state: State<'_, AppState>,
     file_paths: Vec<String>,
@@ -401,8 +408,8 @@ pub async fn run_fastsurfer_inference(
         run_fastsurfer_inference_with_app_state(
             backend.as_deref(),
             backend_init_error.as_deref(),
-            file_paths,
-            folder_paths,
+            &file_paths,
+            &folder_paths,
         )
     })
     .await
@@ -411,6 +418,10 @@ pub async fn run_fastsurfer_inference(
 
 /// Primary command for starting an inference task with full progress tracking.
 #[tauri::command]
+///
+/// # Errors
+/// Returns an error when progress-aware native or backend inference fails, or
+/// when the blocking worker task cannot be joined.
 pub async fn run_fastsurfer_inference_with_progress(
     app_handle: AppHandle,
     app_state: State<'_, AppState>,
@@ -450,8 +461,8 @@ pub async fn run_fastsurfer_inference_with_progress(
             backend_init_error.as_deref(),
             &cancelled_tasks,
             task_id,
-            file_paths,
-            folder_paths,
+            &file_paths,
+            &folder_paths,
         )
     })
     .await

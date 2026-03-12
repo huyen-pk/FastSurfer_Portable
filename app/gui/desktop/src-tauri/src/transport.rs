@@ -8,8 +8,9 @@ use std::io::{BufRead, Write};
 /// * `process` - Reference to the running `BackendProcess` wrapper.
 /// * `request` - The JSON-RPC request payload.
 ///
-/// # Returns
-/// `Ok(())` on success, or an error description.
+/// # Errors
+/// Returns an error when writing or flushing the request to the backend stdin
+/// fails.
 pub fn write_ipc_request(
     process: &mut BackendProcess,
     request: &Value,
@@ -20,7 +21,7 @@ pub fn write_ipc_request(
         .unwrap_or("<unknown>");
     eprintln!("[trace][ipc] -> method={method} payload={request}");
 
-    let request_line = format!("{}\n", request);
+    let request_line = format!("{request}\n");
     process
         .stdin
         .write_all(request_line.as_bytes())
@@ -41,8 +42,9 @@ pub fn write_ipc_request(
 /// * `process` - Reference to the running `BackendProcess` wrapper.
 /// * `on_progress` - Optional closure to handle out-of-band progress events.
 ///
-/// # Returns
-/// The final JSON response value, or an error description.
+/// # Errors
+/// Returns an error when reading stdout fails, the backend exits before a
+/// response arrives, or the received JSON payload is invalid.
 pub fn read_ipc_response(
     process: &mut BackendProcess,
     on_progress: &mut Option<&mut dyn FnMut(Value)>,
@@ -73,11 +75,8 @@ pub fn read_ipc_response(
 
         match serde_json::from_str::<Value>(trimmed) {
             Ok(response) => {
-                if response
-                    .get("event")
-                    .and_then(Value::as_str)
-                    .map(|name| name == "progress")
-                    .unwrap_or(false)
+                if response.get("event").and_then(Value::as_str)
+                    == Some("progress")
                 {
                     eprintln!("[trace][ipc] <- progress event={response}");
                     if let Some(handler) = on_progress.as_deref_mut() {
@@ -90,8 +89,6 @@ pub fn read_ipc_response(
                     eprintln!("[trace][ipc] <- response={response}");
                     return Ok(response);
                 }
-
-                continue;
             }
             Err(e) => return Err(format!("Invalid IPC response JSON: {e}")),
         }

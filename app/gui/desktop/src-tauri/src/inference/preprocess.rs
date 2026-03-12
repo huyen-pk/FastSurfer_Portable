@@ -7,13 +7,12 @@ pub use crate::models::{InferencePlane, InputVolume, PreparedPlaneInput};
 
 fn is_supported_native_input_path(path: &str) -> bool {
     let p = std::path::Path::new(path);
-    if let Some(ext) = p.extension().and_then(|s| s.to_str()) {
-        if ext.eq_ignore_ascii_case("nii")
+    if let Some(ext) = p.extension().and_then(|s| s.to_str())
+        && (ext.eq_ignore_ascii_case("nii")
             || ext.eq_ignore_ascii_case("mgz")
-            || ext.eq_ignore_ascii_case("mgh")
-        {
-            return true;
-        }
+            || ext.eq_ignore_ascii_case("mgh"))
+    {
+        return true;
     }
     // fallback for .nii.gz style names
     if let Some(fname) = p.file_name().and_then(|s| s.to_str()) {
@@ -123,7 +122,12 @@ fn convert_mgz_to_nifti(input_path: &str) -> Result<PathBuf, String> {
         })
 }
 
-pub(crate) fn load_input_volume(path: &str) -> Result<InputVolume, String> {
+/// Load a supported native inference input volume from disk.
+///
+/// # Errors
+/// Returns an error if the path is unsupported, conversion from `MGZ`/`MGH` to
+/// `NIfTI` fails, or the `NIfTI` volume cannot be read/materialized.
+pub fn load_input_volume(path: &str) -> Result<InputVolume, String> {
     if !is_supported_native_input_path(path) {
         return Err(format!(
             "Native Rust inference supports .nii/.nii.gz and .mgz/.mgh input, got: {path}"
@@ -195,7 +199,12 @@ pub(crate) fn prepare_single_plane_input(
     prepare_plane_input_for_slice(volume, plane, num_channels, base_res, center)
 }
 
-pub(crate) fn prepare_plane_input_for_slice(
+/// Prepare a single slice tensor for one inference plane.
+///
+/// # Errors
+/// Returns an error if the transformed volume shape is invalid or the slice
+/// index is out of bounds.
+pub fn prepare_plane_input_for_slice(
     volume: &InputVolume,
     plane: InferencePlane,
     num_channels: usize,
@@ -307,7 +316,8 @@ pub(crate) fn thick_slice_channel_count(slice_thickness: usize) -> usize {
     (2 * slice_thickness) + 1
 }
 
-pub(crate) fn transformed_volume_shape(
+#[must_use]
+pub fn transformed_volume_shape(
     shape_coronal: [usize; 3],
     plane: InferencePlane,
 ) -> [usize; 3] {
