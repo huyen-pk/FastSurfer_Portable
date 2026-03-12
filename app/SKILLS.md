@@ -99,6 +99,20 @@ Validation:
 - Confirm artifact exists: `ls -l app/gui/desktop/backend/main`
 - Confirm executable bit: `test -x app/gui/desktop/backend/main`
 
+### Build Scripts
+
+- **Use scripts in `app/`:** Prefer the provided shell scripts under the `app/` directory for common build and maintenance tasks instead of ad-hoc commands. These scripts centralize environment setup, build steps, and cleanup for app-level components.
+- **Common scripts:** Example scripts present in the repo include `app/build_app.sh` and `app/clean_build_artifacts.sh`. Run them with `bash` or `sh` as appropriate:
+
+   - `bash app/build_app.sh` — build or package app artifacts as defined by the script.
+   - `bash app/clean_build_artifacts.sh` — remove generated artifacts and reset build outputs.
+
+- **Guidelines for scripts:**
+   - Make scripts idempotent and safe to run repeatedly.
+   - Document required environment variables and permissions at the top of the script and in the per-feature `implementation_plan.md` when applicable.
+   - Ensure scripts are executable (`chmod +x`) when intended to be run directly.
+   - When adding new build-related scripts, update `app/README.md` or the feature's `implementation_plan.md` with usage examples and required inputs.
+
 ---
 
 ## Writing Tests
@@ -152,6 +166,21 @@ Python binary config for desktop IPC launch/e2e tests:
 Skip policy for Python-launch/e2e tests:
 - In CI, tests may skip when runtime dependencies are unavailable.
 - In local development, tests should fail (not skip) to surface setup issues.
+
+
+## Writing BDD Requirements
+ - **Placement:** For each new feature, create a dedicated subfolder under `app/specs/{feature_name}` where `{feature_name}` is the feature's machine-friendly name (lowercase, underscore-separated). Place the BDD requirements file at `app/specs/{feature_name}/bdd_requirements.md`.
+ - **Filename:** Use the exact filename `bdd_requirements.md` for the high-level behavioral spec for that feature.
+ - **Contents:** The `bdd_requirements.md` file should contain high-level acceptance criteria expressed as BDD scenarios (Gherkin-style or structured markdown) and a short description of required real dependencies/environments needed to run the scenarios.
+ - **Tests:** BDD test files derived from these requirements must follow the same rules described in this "Writing Tests" section (naming convention, real-dependencies policy, placement conventions, and anti-mocking policy).
+ - **Example path:** `app/specs/user_login/bdd_requirements.md` (for a "user_login" feature).
+
+## Implementation Plan
+
+- **Placement:** Implementation plans use the same per-feature folder rule as BDD requirements: `app/specs/{feature_name}` where `{feature_name}` is lowercase and underscore-separated.
+- **Filename:** Name the plan `implementation_plan.md` and place it inside the feature folder (e.g., `app/specs/user_login/implementation_plan.md`).
+- **Contents:** The implementation plan should include an overview, proposed design, key files to change, a short list of acceptance criteria linked to the BDD requirements, and any setup or environment notes needed to implement and test the feature.
+- **Example path:** `app/specs/user_login/implementation_plan.md`.
 
 Output:
 - Rust CI log: `testing/rust/results/cargo-test.log`

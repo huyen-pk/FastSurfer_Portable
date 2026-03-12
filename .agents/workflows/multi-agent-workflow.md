@@ -8,18 +8,18 @@ This workflow orchestrates the interaction between the Architect, Coder, Reviewe
 
 ## Step 1: Planning (Architect)
 - The Architect analyzes the task and existing codebase.
-- The Architect produces an `implementation_plan.md` artifact.
+ - The Architect produces an `implementation_plan.md` artifact inside `app/specs/{feature_name}`.
 - **Git Isolation**: The Architect sets up an isolated Git worktree for the feature development (e.g., in a `.worktrees/` directory) and ensures these paths are added to the root `.gitignore`.
-- **Output:** [implementation_plan.md](file:///home/huyenpk/Projects/FastSurfer/implementation_plan.md) and initialized worktree environment.
+ - **Output:** `implementation_plan.md` inside `app/specs/{feature_name}` (use lowercase, underscore-separated `feature_name`) and initialized worktree environment.
 
 ## Step 2: Human Approval (Architecture)
-- **Action**: The USER reviews the `implementation_plan.md`.
+- **Action**: The USER reviews the `implementation_plan.md` inside `app/specs/{feature_name}`.
 - **Constraint**: The workflow **must not proceed** until the user approves or directs adjustments.
 
 ## Step 3: Behaviour Driven Tests (Product Owner)
 - The Product Owner analyzes the task/plan to define acceptance criteria.
 - The Product Owner writes high-level BDD tests (Gherkin/features or similar) using **real dependencies**.
-- **Output:** New behavioral test files/definitions.
+ - **Output:** New BDD requirements placed at `app/specs/{feature_name}/bdd_requirements.md` (one folder per feature; use lowercase, underscore-separated `feature_name`). BDD tests derived from these requirements must adhere to rules in `app/SKILLS.md`.
 
 ## Step 4: Human Approval (Tests)
 - **Action**: The USER reviews the BDD tests to ensure they align with requirements.
@@ -34,7 +34,7 @@ This workflow orchestrates the interaction between the Architect, Coder, Reviewe
 - The Tester performs additional unit/integration tests and edge-case verification.
 - The Tester ensures all tests follow the `action_should_expected_behavior` naming convention and placement rules from `app/SKILLS.md`.
 - The Tester ensures all tests follow the **Real Dependencies** and containerized policies.
-- **Output:** [testing_summary.md](file:///home/huyenpk/Projects/FastSurfer/testing_summary.md)
+- **Output:** `testing_summary.md` in test result folder which follows the placement conventions in `app/SKILLS.md`.
 
 ## Step 7: Final Review (Reviewer)
 - The Reviewer examines the plans, BDD tests, code, and verification results.

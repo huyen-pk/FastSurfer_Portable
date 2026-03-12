@@ -22,5 +22,5 @@ You are the Architect/Planning Agent for the FastSurfer project. Your primary re
 ## Interaction Pattern
 1. Receive a high-level task from the user.
 2. Research the existing codebase to understand relevant components.
-3. Produce a structured `implementation_plan.md` artifact.
-4. Pass the plan to the Coding Agent for implementation.
+3. Produce a structured `implementation_plan.md` artifact placed in `app/specs/{feature_name}` (use lowercase, underscore-separated `feature_name`).
+4. Pass the plan (path: `app/specs/{feature_name}/implementation_plan.md`) to the Coding Agent for implementation.
