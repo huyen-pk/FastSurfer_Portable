@@ -38,3 +38,7 @@ when bundle up application for user to install.
 need to see whether the conversion is needed (use mgh crate) then handle the conversion natively in rust
 
 - use named variables in string interpolations when there more than 3 arguments
+
+
+- prediction.rs
+=> run_fastsurfer_inference() should run async

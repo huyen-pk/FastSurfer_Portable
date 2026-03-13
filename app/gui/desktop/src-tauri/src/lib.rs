@@ -1,5 +1,6 @@
 // Declare child modules.
 pub mod backend;
+pub mod events;
 pub mod feature_flags;
 pub mod file_mgmt;
 pub mod inference;

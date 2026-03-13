@@ -1,6 +1,6 @@
+use crate::inference::engine::onnx_loader_candle as candle_loader;
+use crate::inference::engine::onnx_loader_ort as ort_loader;
 use crate::inference::entities::InferencePlane;
-use crate::inference::onnx_loader_candle as candle_loader;
-use crate::inference::onnx_loader_ort as ort_loader;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum NativeOnnxRuntime {

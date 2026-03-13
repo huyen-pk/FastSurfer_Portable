@@ -11,7 +11,7 @@ use super::support::{
 use crate::inference::pipeline::preprocess::{
     InferencePlane, load_input_volume, transformed_volume_shape,
 };
-use crate::prediction::run_fastsurfer_inference_with_backend;
+use crate::prediction::legacy_run_fastsurfer_inference_with_backend;
 use crate::process_mgmt::{
     load_desktop_env, resolve_backend_launch_command_from,
     resolve_python_executable,
@@ -101,7 +101,7 @@ fn run_fastsurfer_inference_with_test_data_should_produce_output_file() {
 
     let file_paths = vec![input_path.to_string_lossy().to_string()];
     let folder_paths: Vec<String> = vec![];
-    let result = run_fastsurfer_inference_with_backend(
+    let result = legacy_run_fastsurfer_inference_with_backend(
         &backend,
         &file_paths,
         &folder_paths,
@@ -281,7 +281,7 @@ fn parity_native_rust_inference_with_test_data_should_generate_output_and_compar
         .expect("failed to spawn backend process for parity comparison");
 
     let backend = create_backend_state_via_process(child);
-    let py_result = run_fastsurfer_inference_with_backend(
+    let py_result = legacy_run_fastsurfer_inference_with_backend(
         &backend,
         &[input_mgz.to_string_lossy().to_string()],
         &[],

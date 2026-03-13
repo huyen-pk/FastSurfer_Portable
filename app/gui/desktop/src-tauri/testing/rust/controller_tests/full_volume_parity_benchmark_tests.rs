@@ -13,7 +13,7 @@ use crate::inference::pipeline::preprocess::{
     InferencePlane, InputVolume, load_input_volume,
     prepare_plane_input_for_slice, transformed_volume_shape,
 };
-use crate::prediction::run_fastsurfer_inference_with_backend;
+use crate::prediction::legacy_run_fastsurfer_inference_with_backend;
 use crate::process_mgmt::{
     load_desktop_env, resolve_backend_launch_command_from,
 };
@@ -471,7 +471,7 @@ fn inference_stage_python(
     let backend = create_backend_state_via_process(child);
 
     let t0 = Instant::now();
-    let py_result = run_fastsurfer_inference_with_backend(
+    let py_result = legacy_run_fastsurfer_inference_with_backend(
         &backend,
         &[input_path.to_string_lossy().to_string()],
         &[],

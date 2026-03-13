@@ -3,7 +3,7 @@ use super::support::{
     create_backend_state_via_shell_script,
     create_backend_state_with_fake_responses,
 };
-use crate::prediction::run_fastsurfer_inference_with_backend;
+use crate::prediction::legacy_run_fastsurfer_inference_with_backend;
 
 #[test]
 fn predict_single_path_should_forward_progress_events_from_backend() {
@@ -39,7 +39,7 @@ fn run_fastsurfer_inference_with_backend_should_merge_start_and_predict_results(
 
     let file_paths = vec!["/in/a.nii.gz".to_string()];
     let folder_paths: Vec<String> = vec![];
-    let result = run_fastsurfer_inference_with_backend(
+    let result = legacy_run_fastsurfer_inference_with_backend(
         &backend,
         &file_paths,
         &folder_paths,

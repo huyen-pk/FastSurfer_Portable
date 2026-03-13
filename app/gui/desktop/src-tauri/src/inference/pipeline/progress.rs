@@ -1,4 +1,4 @@
-use crate::inference::entities::InferenceProgressEvent;
+use crate::events::InferenceProgressEvent;
 use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex};
 use tauri::Emitter;
