@@ -1,13 +1,3 @@
-#![allow(
-    clippy::cast_possible_wrap,
-    clippy::cast_sign_loss,
-    clippy::cast_precision_loss,
-    clippy::bool_to_int_with_if,
-    clippy::case_sensitive_file_extension_comparisons,
-    clippy::ignored_unit_patterns,
-    clippy::uninlined_format_args
-)]
-
 pub(crate) struct QcResult {
     pub passed: Option<bool>,
     pub message: Option<String>,
@@ -35,18 +25,19 @@ pub(crate) fn evaluate_qc(
         ));
     }
 
-    let non_bg_voxels = labels_xyz.iter().filter(|v| **v > 0).count() as u64;
-    let total_volume_liters = (non_bg_voxels as f64) * voxvol_mm3 / 1_000_000.0;
+    let non_bg_voxels_f = labels_xyz
+        .iter()
+        .filter(|v| **v > 0)
+        .map(|_| 1.0f64)
+        .sum::<f64>();
+    let total_volume_liters = non_bg_voxels_f * voxvol_mm3 / 1_000_000.0;
 
-    let vent_bg_touching = count_vent_bg_touching(labels_xyz, sx, sy, sz);
+    let vent_bg_touching_f = count_vent_bg_touching(labels_xyz, sx, sy, sz);
 
-    let vent_bg_intersection_mm3 = (vent_bg_touching as f64) * voxvol_mm3;
+    let vent_bg_intersection_mm3 = vent_bg_touching_f * voxvol_mm3;
     let passed = total_volume_liters >= QC_TOTAL_VOLUME_MIN_LITERS;
     let message = format!(
-        "total_volume_liters={:.3} threshold_liters={:.2} vent_bg_intersection_mm3={:.2}",
-        total_volume_liters,
-        QC_TOTAL_VOLUME_MIN_LITERS,
-        vent_bg_intersection_mm3,
+        "total_volume_liters={total_volume_liters:.3} threshold_liters={QC_TOTAL_VOLUME_MIN_LITERS:.2} vent_bg_intersection_mm3={vent_bg_intersection_mm3:.2}",
     );
 
     Ok(QcResult {
@@ -60,8 +51,8 @@ fn count_vent_bg_touching(
     sx: usize,
     sy: usize,
     sz: usize,
-) -> usize {
-    let mut vent_bg_touching = 0usize;
+) -> f64 {
+    let mut vent_bg_touching = 0f64;
 
     for x in 0..sx {
         for y in 0..sy {
@@ -73,7 +64,7 @@ fn count_vent_bg_touching(
                 }
 
                 if voxel_touches_background(labels_xyz, sx, sy, sz, x, y, z) {
-                    vent_bg_touching += 1;
+                    vent_bg_touching += 1.0;
                 }
             }
         }

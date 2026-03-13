@@ -1,21 +1,15 @@
-use crate::inference::onnx_loader_candle as candle_loader;
-use crate::inference::onnx_loader_ort as ort_loader;
 use crate::inference::postprocess;
 use crate::inference::preprocess;
 use crate::inference::qc::evaluate_qc;
+use crate::inference::{io, progress, runtime};
 use crate::models::{
-    InferenceArtifacts, InferenceOutput, InferencePlane,
-    InferenceProgressEvent, InferenceQc, InputVolume, ProcessingRunResult,
+    InferenceArtifacts, InferenceOutput, InferencePlane, InferenceQc,
+    InputVolume, ProcessingRunResult,
 };
-use ndarray::Array3;
-use nifti::writer::WriterOptions;
 use std::collections::{BTreeSet, HashMap};
-use std::fs;
-use std::io::{BufRead, BufReader};
-use std::path::{Path, PathBuf};
+// Path types are provided by the io/runtime modules where needed.
 use std::sync::{Arc, Mutex};
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
-use tauri::Emitter;
+use std::time::Instant;
 use tokio::sync::mpsc;
 
 #[derive(Clone)]
@@ -26,281 +20,16 @@ struct PlaneForwardResult {
     slice_index: usize,
 }
 
-struct NativeSingleResult {
+#[derive(Clone)]
+pub(crate) struct NativeSingleResult {
     prediction: InferenceOutput,
     result_directory: String,
     qc_summary: String,
 }
 
-const NATIVE_CANCELLED_MESSAGE: &str = "Task cancelled by user.";
+// Cancellation, progress and runtime helpers moved to `progress` and `runtime` modules.
 
-fn cancelled_error() -> String {
-    NATIVE_CANCELLED_MESSAGE.to_string()
-}
-
-fn is_task_cancelled(
-    cancelled_tasks: &Arc<Mutex<BTreeSet<String>>>,
-    task_id: &str,
-) -> Result<bool, String> {
-    cancelled_tasks
-        .lock()
-        .map_err(|_| "Cancelled tasks mutex was poisoned".to_string())
-        .map(|set| set.contains(task_id))
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum NativeOnnxRuntime {
-    Candle,
-    Ort,
-}
-
-#[derive(Clone)]
-enum NativeOnnxSessions {
-    Candle(candle_loader::NativeOnnxSessions),
-    Ort(ort_loader::NativeOnnxSessions),
-}
-
-enum PlaneSessionRef<'a> {
-    Candle(&'a candle_loader::PlaneSession),
-    Ort(&'a ort_loader::PlaneSession),
-}
-
-struct PlaneRun {
-    logits: Vec<f32>,
-    shape_chw: [usize; 3],
-    output_shapes: Vec<Vec<usize>>,
-}
-
-fn resolve_native_onnx_runtime() -> NativeOnnxRuntime {
-    let raw = std::env::var("FASTSURFER_NATIVE_RUNTIME")
-        .unwrap_or_else(|_| "candle".to_string())
-        .trim()
-        .to_ascii_lowercase();
-
-    match raw.as_str() {
-        "ort" | "onnxruntime" | "onnx-runtime" => NativeOnnxRuntime::Ort,
-        _ => NativeOnnxRuntime::Candle,
-    }
-}
-
-impl NativeOnnxRuntime {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Candle => "candle",
-            Self::Ort => "ort",
-        }
-    }
-}
-
-impl NativeOnnxSessions {
-    fn runtime(&self) -> NativeOnnxRuntime {
-        match self {
-            Self::Candle(_) => NativeOnnxRuntime::Candle,
-            Self::Ort(_) => NativeOnnxRuntime::Ort,
-        }
-    }
-
-    fn load_default() -> Result<Self, String> {
-        match resolve_native_onnx_runtime() {
-            NativeOnnxRuntime::Candle => {
-                candle_loader::NativeOnnxSessions::load_default()
-                    .map(Self::Candle)
-            }
-            NativeOnnxRuntime::Ort => {
-                ort_loader::NativeOnnxSessions::load_default().map(Self::Ort)
-            }
-        }
-    }
-
-    fn source_dir(&self) -> &str {
-        match self {
-            Self::Candle(models) => &models.registry.source_dir,
-            Self::Ort(models) => &models.registry.source_dir,
-        }
-    }
-
-    fn model_paths_summary(&self) -> String {
-        match self {
-            Self::Candle(models) => format!(
-                "axial='{}', coronal='{}', sagittal='{}'",
-                models.registry.axial_model_path,
-                models.registry.coronal_model_path,
-                models.registry.sagittal_model_path
-            ),
-            Self::Ort(models) => format!(
-                "axial='{}', coronal='{}', sagittal='{}'",
-                models.registry.axial_model_path,
-                models.registry.coronal_model_path,
-                models.registry.sagittal_model_path
-            ),
-        }
-    }
-
-    fn run_dummy_probe(&self) -> Result<Vec<String>, String> {
-        match self {
-            Self::Candle(models) => models.run_dummy_probe(),
-            Self::Ort(models) => models.run_dummy_probe(),
-        }
-    }
-
-    fn plane_session(&self, plane: InferencePlane) -> PlaneSessionRef<'_> {
-        match (self, plane) {
-            (Self::Candle(models), InferencePlane::Coronal) => {
-                PlaneSessionRef::Candle(&models.coronal)
-            }
-            (Self::Candle(models), InferencePlane::Axial) => {
-                PlaneSessionRef::Candle(&models.axial)
-            }
-            (Self::Candle(models), InferencePlane::Sagittal) => {
-                PlaneSessionRef::Candle(&models.sagittal)
-            }
-            (Self::Ort(models), InferencePlane::Coronal) => {
-                PlaneSessionRef::Ort(&models.coronal)
-            }
-            (Self::Ort(models), InferencePlane::Axial) => {
-                PlaneSessionRef::Ort(&models.axial)
-            }
-            (Self::Ort(models), InferencePlane::Sagittal) => {
-                PlaneSessionRef::Ort(&models.sagittal)
-            }
-        }
-    }
-
-    fn class_count_or_default(&self) -> usize {
-        let output_shapes = match self {
-            Self::Candle(models) => &models.coronal.output_shapes,
-            Self::Ort(models) => &models.coronal.output_shapes,
-        };
-
-        output_shapes
-            .first()
-            .and_then(std::option::Option::as_deref)
-            .and_then(|dims| dims.get(1).copied())
-            .unwrap_or(79usize)
-    }
-}
-
-impl PlaneSessionRef<'_> {
-    fn input_shape(&self) -> Option<&[usize]> {
-        match self {
-            Self::Candle(session) => session.input_shape.as_deref(),
-            Self::Ort(session) => session.input_shape.as_deref(),
-        }
-    }
-
-    fn run(
-        &self,
-        input_shape: &[usize],
-        input_data: &[f32],
-        scale_factor: [f32; 2],
-        plane: &str,
-    ) -> Result<PlaneRun, String> {
-        match self {
-            Self::Candle(session) => {
-                let run = session.run(
-                    input_shape,
-                    input_data,
-                    scale_factor,
-                    plane,
-                )?;
-                Ok(PlaneRun {
-                    logits: run.logits,
-                    shape_chw: run.shape_chw,
-                    output_shapes: run.output_shapes,
-                })
-            }
-            Self::Ort(session) => {
-                let run = session.run(
-                    input_shape,
-                    input_data,
-                    scale_factor,
-                    plane,
-                )?;
-                Ok(PlaneRun {
-                    logits: run.logits,
-                    shape_chw: run.shape_chw,
-                    output_shapes: run.output_shapes,
-                })
-            }
-        }
-    }
-}
-
-fn discovery_summary(models: &NativeOnnxSessions) -> String {
-    models.model_paths_summary()
-}
-
-fn session_channels_or_default(input_shape: Option<&[usize]>) -> usize {
-    input_shape
-        .and_then(|dims| dims.get(1).copied())
-        .filter(|channels| *channels > 0)
-        .unwrap_or(7)
-}
-
-fn native_trace_timing_enabled() -> bool {
-    std::env::var("FASTSURFER_NATIVE_TRACE_TIMING")
-        .map(|value| {
-            let normalized = value.trim().to_ascii_lowercase();
-            normalized == "1"
-                || normalized == "true"
-                || normalized == "yes"
-                || normalized == "on"
-        })
-        .unwrap_or(false)
-}
-
-fn parse_native_slices_per_plane() -> Option<usize> {
-    std::env::var("FASTSURFER_NATIVE_SLICES_PER_PLANE")
-        .ok()
-        .and_then(|value| value.trim().parse::<usize>().ok())
-        .filter(|value| *value > 0)
-}
-
-fn native_parallel_enabled() -> bool {
-    std::env::var("FASTSURFER_NATIVE_PARALLEL")
-        .map(|value| {
-            let normalized = value.trim().to_ascii_lowercase();
-            !(normalized == "0"
-                || normalized == "false"
-                || normalized == "no"
-                || normalized == "off")
-        })
-        .unwrap_or(true)
-}
-
-fn native_slice_indices_for_plane(total_slices: usize) -> Vec<usize> {
-    if total_slices == 0 {
-        return Vec::new();
-    }
-
-    let Some(requested) = parse_native_slices_per_plane() else {
-        return (0..total_slices).collect::<Vec<usize>>();
-    };
-
-    let requested = requested.min(total_slices);
-    if requested >= total_slices {
-        return (0..total_slices).collect::<Vec<usize>>();
-    }
-
-    if requested == 1 {
-        return vec![total_slices / 2];
-    }
-
-    let max_idx = total_slices - 1;
-    let mut indices = Vec::<usize>::with_capacity(requested);
-    for i in 0..requested {
-        let idx = (i * max_idx) / (requested - 1);
-        if indices.last().copied() != Some(idx) {
-            indices.push(idx);
-        }
-    }
-
-    if indices.is_empty() {
-        vec![total_slices / 2]
-    } else {
-        indices
-    }
-}
+// Runtime/session helpers moved to `runtime.rs`.
 
 fn build_sampled_lookup(
     volume: &InputVolume,
@@ -346,7 +75,7 @@ struct FinalizeNativeResultInput<'a> {
     label_indices_xyz: &'a [u16],
     class_hist: &'a [usize],
     plane_first_summaries: &'a [String],
-    sessions: &'a NativeOnnxSessions,
+    sessions: &'a runtime::NativeOnnxSessions,
     lut_ids: &'a [u16],
     input_path: &'a str,
 }
@@ -368,7 +97,7 @@ fn finalize_native_result(
     on_progress(92, "Converting logits to label volume...".to_string());
 
     let mut pred_labels_xyz =
-        map_label_indices_to_lut(label_indices_xyz, lut_ids)?;
+        io::map_label_indices_to_lut(label_indices_xyz, lut_ids)?;
     postprocess::split_cortex_labels(&mut pred_labels_xyz, volume.shape_xyz);
 
     let mut ranked = class_hist
@@ -389,7 +118,7 @@ fn finalize_native_result(
     on_progress(95, "Writing native prediction outputs...".to_string());
 
     let (output_dir, pred_path, aseg_path, brainmask_path) =
-        write_prediction_artifacts(volume, &pred_labels_xyz)?;
+        io::write_prediction_artifacts(volume, &pred_labels_xyz)?;
 
     let [sx, sy, sz] = volume.shape_xyz;
     let voxvol_mm3 = f64::from(volume.zoom_xyz[0])
@@ -399,13 +128,13 @@ fn finalize_native_result(
 
     on_progress(100, "Rust ONNX inference completed.".to_string());
 
-    if native_trace_timing_enabled() {
+    if runtime::native_trace_timing_enabled() {
         let probe = sessions.run_dummy_probe()?;
         eprintln!(
             "[trace][native-inference] runtime={} loaded ONNX sessions from {} ({}) | probe={} | preproc={} | input='{}' | {} | classes={} voxels={} top_classes=[{}] output='{}'",
             sessions.runtime().as_str(),
             sessions.source_dir(),
-            discovery_summary(sessions),
+            runtime::discovery_summary(sessions),
             probe.join(" | "),
             legacy_preprocessing_summary(sessions),
             input_path,
@@ -455,17 +184,19 @@ fn finalize_native_result(
     })
 }
 
-fn legacy_preprocessing_summary(models: &NativeOnnxSessions) -> String {
+fn legacy_preprocessing_summary(
+    models: &runtime::NativeOnnxSessions,
+) -> String {
     let base_res = 1.0f32;
     let synthetic_zoom = [1.0f32, 1.0f32, 1.0f32];
 
-    let axial_channels = session_channels_or_default(
+    let axial_channels = runtime::session_channels_or_default(
         models.plane_session(InferencePlane::Axial).input_shape(),
     );
-    let coronal_channels = session_channels_or_default(
+    let coronal_channels = runtime::session_channels_or_default(
         models.plane_session(InferencePlane::Coronal).input_shape(),
     );
-    let sagittal_channels = session_channels_or_default(
+    let sagittal_channels = runtime::session_channels_or_default(
         models.plane_session(InferencePlane::Sagittal).input_shape(),
     );
 
@@ -492,7 +223,7 @@ fn legacy_preprocessing_summary(models: &NativeOnnxSessions) -> String {
 }
 
 struct ForwardPassRequest<'a> {
-    sessions: &'a NativeOnnxSessions,
+    sessions: &'a runtime::NativeOnnxSessions,
     volume: &'a InputVolume,
     plane_specs: &'a [(InferencePlane, &'a [usize], usize, f32)],
 }
@@ -512,7 +243,7 @@ fn execute_forward_pass(
     // Note: `sparse_mode` (sampling slices) is orthogonal and may be
     // executed in either parallel or sequential mode depending on the
     // `FASTSURFER_NATIVE_PARALLEL` environment setting.
-    let parallel_enabled = native_parallel_enabled();
+    let parallel_enabled = runtime::native_parallel_enabled();
     if parallel_enabled {
         execute_forward_pass_parallel(rt, sessions, volume, plane_specs, ctx)
     } else {
@@ -531,13 +262,13 @@ struct ForwardPassContext<'a> {
 
 fn execute_forward_pass_parallel(
     rt: &tokio::runtime::Handle,
-    sessions: &NativeOnnxSessions,
+    sessions: &runtime::NativeOnnxSessions,
     volume: &InputVolume,
     plane_specs: &[(InferencePlane, &[usize], usize, f32)],
     ctx: &mut ForwardPassContext,
 ) -> Result<(), String> {
     if (ctx.should_cancel)() {
-        return Err(cancelled_error());
+        return Err(progress::cancelled_error());
     }
 
     (ctx.on_progress)(5, "Initializing parallel ONNX inference...".to_string());
@@ -567,7 +298,7 @@ fn execute_forward_pass_parallel(
         }
 
         if (ctx.should_cancel)() {
-            return Err(cancelled_error());
+            return Err(progress::cancelled_error());
         }
 
         let tx_clone = tx.clone();
@@ -599,7 +330,7 @@ fn execute_forward_pass_parallel(
 
     while let Some(msg) = rt.block_on(rx.recv()) {
         if (ctx.should_cancel)() {
-            return Err(cancelled_error());
+            return Err(progress::cancelled_error());
         }
         let (plane, weight, plane_result) = msg?;
         let mut pr_ctx = PlaneResultContext {
@@ -628,7 +359,7 @@ fn execute_forward_pass_parallel(
 
 fn execute_forward_pass_sequential(
     _rt: &tokio::runtime::Handle,
-    sessions: &NativeOnnxSessions,
+    sessions: &runtime::NativeOnnxSessions,
     volume: &InputVolume,
     plane_specs: &[(InferencePlane, &[usize], usize, f32)],
     ctx: &mut ForwardPassContext,
@@ -642,7 +373,7 @@ fn execute_forward_pass_sequential(
         for (position, slice_index) in slice_indices.iter().copied().enumerate()
         {
             if (ctx.should_cancel)() {
-                return Err(cancelled_error());
+                return Err(progress::cancelled_error());
             }
 
             let mut plane_result = run_single_plane_forward_at_slice(
@@ -733,16 +464,17 @@ fn handle_plane_result(
 }
 
 fn run_single_plane_forward_at_slice(
-    sessions: &NativeOnnxSessions,
+    sessions: &runtime::NativeOnnxSessions,
     volume: &InputVolume,
     plane: InferencePlane,
     slice_index: usize,
 ) -> Result<PlaneForwardResult, String> {
-    let trace_timing = native_trace_timing_enabled();
+    let trace_timing = runtime::native_trace_timing_enabled();
     let t0 = Instant::now();
     let session = sessions.plane_session(plane);
 
-    let channel_count = session_channels_or_default(session.input_shape());
+    let channel_count =
+        runtime::session_channels_or_default(session.input_shape());
     let t_pre = Instant::now();
     let prepared = preprocess::prepare_plane_input_for_slice(
         volume,
@@ -1083,220 +815,6 @@ fn argmax_labels_from_logits(
     Ok((labels, class_hist))
 }
 
-fn create_native_output_dir() -> Result<PathBuf, String> {
-    let epoch_ns = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|error| {
-            format!(
-                "System clock error while creating output directory: {error}"
-            )
-        })?
-        .as_nanos();
-
-    let base_output_root = std::env::var("FASTSURFER_NATIVE_OUTPUT_ROOT")
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .map_or_else(std::env::temp_dir, PathBuf::from);
-
-    fs::create_dir_all(&base_output_root).map_err(|error| {
-        format!(
-            "Failed to create output root directory '{}': {error}",
-            base_output_root.display()
-        )
-    })?;
-
-    let output_dir =
-        base_output_root.join(format!("fastsurfer_ipc_out_{epoch_ns}"));
-    fs::create_dir_all(&output_dir).map_err(|error| {
-        format!(
-            "Failed to create output directory '{}': {error}",
-            output_dir.display()
-        )
-    })?;
-
-    Ok(output_dir)
-}
-
-fn is_supported_nifti_path(path: &Path) -> bool {
-    path.extension().is_some_and(|ext| {
-        ext.eq_ignore_ascii_case("nii")
-            || ext.eq_ignore_ascii_case("mgz")
-            || ext.eq_ignore_ascii_case("mgh")
-    }) || path
-        .to_string_lossy()
-        .to_ascii_lowercase()
-        .ends_with(".nii.gz")
-}
-
-fn collect_nifti_files_recursive(dir: &Path, out: &mut Vec<String>) {
-    let Ok(entries) = fs::read_dir(dir) else {
-        return;
-    };
-
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            collect_nifti_files_recursive(&path, out);
-        } else if path.is_file() && is_supported_nifti_path(&path) {
-            out.push(path.to_string_lossy().to_string());
-        }
-    }
-}
-
-fn discover_lut_path() -> Option<PathBuf> {
-    if let Ok(explicit_path) = std::env::var("FASTSURFER_LUT_PATH") {
-        let path = PathBuf::from(explicit_path);
-        if path.exists() && path.is_file() {
-            return Some(path);
-        }
-    }
-
-    let mut candidates = Vec::<PathBuf>::new();
-    if let Ok(repo_root) = std::env::var("FASTSURFER_REPO_ROOT") {
-        candidates.push(
-            PathBuf::from(repo_root)
-                .join("FastSurferCNN/config/FreeSurferColorLUT.txt"),
-        );
-    }
-    if let Ok(cwd) = std::env::current_dir() {
-        candidates
-            .push(cwd.join("FastSurferCNN/config/FreeSurferColorLUT.txt"));
-        candidates.push(
-            cwd.join("..")
-                .join("..")
-                .join("..")
-                .join("..")
-                .join("FastSurferCNN/config/FreeSurferColorLUT.txt"),
-        );
-    }
-
-    candidates
-        .into_iter()
-        .find(|candidate| candidate.exists() && candidate.is_file())
-}
-
-fn load_lut_ids() -> Result<Vec<u16>, String> {
-    let lut_path = discover_lut_path().ok_or_else(|| {
-        "Could not discover FreeSurferColorLUT.txt. Set FASTSURFER_LUT_PATH or FASTSURFER_REPO_ROOT."
-            .to_string()
-    })?;
-
-    let file = fs::File::open(&lut_path).map_err(|error| {
-        format!("Failed to open LUT '{}': {error}", lut_path.display())
-    })?;
-    let reader = BufReader::new(file);
-
-    let mut ids = Vec::<u16>::new();
-    for line in reader.lines() {
-        let line = line.map_err(|error| {
-            format!("Failed reading LUT '{}': {error}", lut_path.display())
-        })?;
-        let trimmed = line.trim();
-        if trimmed.is_empty() || trimmed.starts_with('#') {
-            continue;
-        }
-        let mut parts = trimmed.split_whitespace();
-        let Some(first) = parts.next() else {
-            continue;
-        };
-        if let Ok(id) = first.parse::<u16>() {
-            ids.push(id);
-        }
-    }
-
-    if ids.is_empty() {
-        return Err(format!(
-            "No class IDs parsed from LUT '{}'.",
-            lut_path.display()
-        ));
-    }
-
-    Ok(ids)
-}
-
-fn map_label_indices_to_lut(
-    label_indices: &[u16],
-    lut_ids: &[u16],
-) -> Result<Vec<u16>, String> {
-    if lut_ids.is_empty() {
-        return Err(
-            "LUT IDs are empty; cannot map class indices to label space."
-                .to_string(),
-        );
-    }
-
-    let mut mapped = Vec::<u16>::with_capacity(label_indices.len());
-    for index in label_indices {
-        let idx = *index as usize;
-        let label = lut_ids.get(idx).ok_or_else(|| {
-            format!(
-                "Predicted class index {} is out of LUT bounds (len={}).",
-                idx,
-                lut_ids.len()
-            )
-        })?;
-        mapped.push(*label);
-    }
-    Ok(mapped)
-}
-
-fn write_pred_nifti(
-    volume: &InputVolume,
-    labels_xyz: Vec<u16>,
-    output_path: &Path,
-) -> Result<(), String> {
-    let [sx, sy, sz] = volume.shape_xyz;
-    let expected_len = sx * sy * sz;
-    if labels_xyz.len() != expected_len {
-        return Err(format!(
-            "Label volume length mismatch: got {}, expected {}",
-            labels_xyz.len(),
-            expected_len
-        ));
-    }
-
-    let array =
-        Array3::from_shape_vec((sx, sy, sz), labels_xyz).map_err(|error| {
-            format!("Failed to shape label array for NIfTI write: {error}")
-        })?;
-
-    WriterOptions::new(output_path)
-        .reference_header(&volume.header)
-        .write_nifti(&array)
-        .map_err(|error| {
-            format!(
-                "Failed to write prediction NIfTI '{}': {error}",
-                output_path.display()
-            )
-        })
-}
-
-fn write_prediction_artifacts(
-    volume: &InputVolume,
-    pred_labels_xyz: &[u16],
-) -> Result<(PathBuf, PathBuf, PathBuf, PathBuf), String> {
-    let output_dir = create_native_output_dir()?;
-    let pred_path = output_dir.join("pred.nii.gz");
-    write_pred_nifti(volume, pred_labels_xyz.to_owned(), &pred_path)?;
-
-    let mut aseg_labels = postprocess::derive_aseg_from_pred(pred_labels_xyz);
-    let brainmask = postprocess::derive_brainmask_from_pred(
-        pred_labels_xyz,
-        volume.shape_xyz,
-    );
-    postprocess::mask_aseg_with_brainmask(&mut aseg_labels, &brainmask);
-    postprocess::flip_wm_islands(&mut aseg_labels, volume.shape_xyz);
-
-    let aseg_path = output_dir.join("aseg.nii.gz");
-    write_pred_nifti(volume, aseg_labels.clone(), &aseg_path)?;
-
-    let brainmask_path = output_dir.join("brainmask.nii.gz");
-    write_u8_nifti(volume, brainmask, &brainmask_path)?;
-
-    Ok((output_dir, pred_path, aseg_path, brainmask_path))
-}
-
 fn finalize_logits_to_labels(
     merged_logits: &[f32],
     class_count: usize,
@@ -1326,39 +844,8 @@ fn finalize_logits_to_labels(
     }
 }
 
-fn write_u8_nifti(
-    volume: &InputVolume,
-    labels_xyz: Vec<u8>,
-    output_path: &Path,
-) -> Result<(), String> {
-    let [sx, sy, sz] = volume.shape_xyz;
-    let expected_len = sx * sy * sz;
-    if labels_xyz.len() != expected_len {
-        return Err(format!(
-            "Label volume length mismatch: got {}, expected {}",
-            labels_xyz.len(),
-            expected_len
-        ));
-    }
-
-    let array =
-        Array3::from_shape_vec((sx, sy, sz), labels_xyz).map_err(|error| {
-            format!("Failed to shape label array for NIfTI write: {error}")
-        })?;
-
-    WriterOptions::new(output_path)
-        .reference_header(&volume.header)
-        .write_nifti(&array)
-        .map_err(|error| {
-            format!(
-                "Failed to write NIfTI '{}': {error}",
-                output_path.display()
-            )
-        })
-}
-
-fn run_native_single_path<F>(
-    sessions: &NativeOnnxSessions,
+pub(crate) fn run_native_single_path<F>(
+    sessions: &runtime::NativeOnnxSessions,
     lut_ids: &[u16],
     input_path: &str,
     should_cancel: &dyn Fn() -> bool,
@@ -1371,7 +858,7 @@ where
         "Failed to get current tokio runtime handle".to_string()
     })?;
     if should_cancel() {
-        return Err(cancelled_error());
+        return Err(progress::cancelled_error());
     }
 
     on_progress(2, "Loading input volume...".to_string());
@@ -1392,9 +879,11 @@ where
         volume.shape_xyz,
         InferencePlane::Sagittal,
     );
-    let coronal_indices = native_slice_indices_for_plane(coronal_slices);
-    let axial_indices = native_slice_indices_for_plane(axial_slices);
-    let sagittal_indices = native_slice_indices_for_plane(sagittal_slices);
+    let coronal_indices =
+        runtime::native_slice_indices_for_plane(coronal_slices);
+    let axial_indices = runtime::native_slice_indices_for_plane(axial_slices);
+    let sagittal_indices =
+        runtime::native_slice_indices_for_plane(sagittal_slices);
     let total_slices =
         coronal_indices.len() + axial_indices.len() + sagittal_indices.len();
 
@@ -1405,15 +894,15 @@ where
         );
     }
 
-    let coronal_channels = session_channels_or_default(
+    let coronal_channels = runtime::session_channels_or_default(
         sessions
             .plane_session(InferencePlane::Coronal)
             .input_shape(),
     );
-    let axial_channels = session_channels_or_default(
+    let axial_channels = runtime::session_channels_or_default(
         sessions.plane_session(InferencePlane::Axial).input_shape(),
     );
-    let sagittal_channels = session_channels_or_default(
+    let sagittal_channels = runtime::session_channels_or_default(
         sessions
             .plane_session(InferencePlane::Sagittal)
             .input_shape(),
@@ -1421,7 +910,7 @@ where
 
     let class_count = sessions.class_count_or_default();
 
-    let sparse_mode = parse_native_slices_per_plane().is_some();
+    let sparse_mode = runtime::parse_native_slices_per_plane().is_some();
 
     let (
         merged_logits,
@@ -1450,7 +939,7 @@ where
     )?;
 
     if should_cancel() {
-        return Err(cancelled_error());
+        return Err(progress::cancelled_error());
     }
 
     on_progress(92, "Converting logits to label volume...".to_string());
@@ -1501,7 +990,7 @@ struct ForwardCallbacks<'a> {
 
 fn run_forward_and_merge(
     rt: &tokio::runtime::Handle,
-    sessions: &NativeOnnxSessions,
+    sessions: &runtime::NativeOnnxSessions,
     volume: &InputVolume,
     plane_sampling: &PlaneSampling<'_>,
     class_count: usize,
@@ -1585,46 +1074,13 @@ fn run_forward_and_merge(
     ))
 }
 
-fn validate_inputs(
-    file_paths: &[String],
-    folder_paths: &[String],
-) -> Result<Vec<String>, String> {
-    let mut resolved = Vec::<String>::new();
-
-    for file in file_paths {
-        let path = PathBuf::from(file);
-        if path.exists() && path.is_file() && is_supported_nifti_path(&path) {
-            resolved.push(path.to_string_lossy().to_string());
-        }
-    }
-
-    for folder in folder_paths {
-        let path = PathBuf::from(folder);
-        if path.exists() && path.is_dir() {
-            collect_nifti_files_recursive(&path, &mut resolved);
-        }
-    }
-
-    if resolved.is_empty() {
-        return Err(
-            "Rust native inference requires at least one valid input path (.nii/.nii.gz/.mgz/.mgh) from files or folders."
-                .to_string(),
-        );
-    }
-
-    resolved.sort();
-    resolved.dedup();
-
-    Ok(resolved)
-}
-
 pub(crate) fn run_native_inference(
     file_paths: &[String],
     folder_paths: &[String],
 ) -> Result<ProcessingRunResult, String> {
-    let requested_paths = validate_inputs(file_paths, folder_paths)?;
-    let sessions = NativeOnnxSessions::load_default()?;
-    let lut_ids = load_lut_ids()?;
+    let requested_paths = io::validate_inputs(file_paths, folder_paths)?;
+    let sessions = runtime::NativeOnnxSessions::load_default()?;
+    let lut_ids = io::load_lut_ids()?;
 
     let mut results = Vec::with_capacity(requested_paths.len());
     let mut result_directories = BTreeSet::new();
@@ -1664,57 +1120,6 @@ pub(crate) fn run_native_inference(
     })
 }
 
-fn load_runtime_dependencies<R: tauri::Runtime>(
-    app_handle: &tauri::AppHandle<R>,
-    task_id: &str,
-    file_paths: &[String],
-    folder_paths: &[String],
-) -> Result<(Vec<String>, NativeOnnxSessions, Vec<u16>), String> {
-    let requested_paths = match validate_inputs(file_paths, folder_paths) {
-        Ok(paths) => paths,
-        Err(error) => {
-            emit_failed_progress(app_handle, task_id, 0, 0, error.clone());
-            return Err(error);
-        }
-    };
-
-    let total = requested_paths.len();
-    emit_inference_progress(
-        app_handle,
-        task_id,
-        ProgressUpdate {
-            status: "started",
-            message: format!(
-                "Rust ONNX mode selected (runtime={}). Initializing ONNX sessions...",
-                resolve_native_onnx_runtime().as_str()
-            ),
-            total,
-            completed: 0,
-            progress: 0,
-            current_path: None,
-            output_path: None,
-        },
-    );
-
-    let sessions = match NativeOnnxSessions::load_default() {
-        Ok(sessions) => sessions,
-        Err(error) => {
-            emit_failed_progress(app_handle, task_id, total, 0, error.clone());
-            return Err(error);
-        }
-    };
-
-    let lut_ids = match load_lut_ids() {
-        Ok(ids) => ids,
-        Err(error) => {
-            emit_failed_progress(app_handle, task_id, total, 0, error.clone());
-            return Err(error);
-        }
-    };
-
-    Ok((requested_paths, sessions, lut_ids))
-}
-
 pub(crate) fn run_native_inference_with_progress<R: tauri::Runtime>(
     app_handle: &tauri::AppHandle<R>,
     cancelled_tasks: &Arc<Mutex<BTreeSet<String>>>,
@@ -1722,12 +1127,8 @@ pub(crate) fn run_native_inference_with_progress<R: tauri::Runtime>(
     file_paths: &[String],
     folder_paths: &[String],
 ) -> Result<ProcessingRunResult, String> {
-    let (requested_paths, sessions, lut_ids) = load_runtime_dependencies(
-        app_handle,
-        task_id,
-        file_paths,
-        folder_paths,
-    )?;
+    let (requested_paths, sessions, lut_ids) =
+        runtime::load_runtime_dependencies(file_paths, folder_paths)?;
 
     let total = requested_paths.len();
 
@@ -1736,7 +1137,7 @@ pub(crate) fn run_native_inference_with_progress<R: tauri::Runtime>(
     let mut qc_summaries = Vec::new();
     for (index, input_path) in requested_paths.iter().enumerate() {
         let single = process_single_input(
-            &SingleInputContext {
+            &progress::SingleInputContext {
                 app_handle,
                 cancelled_tasks,
                 task_id,
@@ -1760,10 +1161,10 @@ pub(crate) fn run_native_inference_with_progress<R: tauri::Runtime>(
         qc_summaries.push(single.qc_summary);
         results.push(single.prediction);
 
-        emit_inference_progress(
+        progress::emit_inference_progress(
             app_handle,
             task_id,
-            ProgressUpdate {
+            progress::ProgressUpdate {
                 status: "item_completed",
                 message: format!("Processed {completed}/{total}"),
                 total,
@@ -1791,10 +1192,10 @@ pub(crate) fn run_native_inference_with_progress<R: tauri::Runtime>(
         )
     };
 
-    emit_inference_progress(
+    progress::emit_inference_progress(
         app_handle,
         task_id,
-        ProgressUpdate {
+        progress::ProgressUpdate {
             status: "completed",
             message: ack_message.clone(),
             total,
@@ -1814,153 +1215,16 @@ pub(crate) fn run_native_inference_with_progress<R: tauri::Runtime>(
     })
 }
 
-struct ProgressUpdate<'a> {
-    status: &'a str,
-    message: String,
-    total: usize,
-    completed: usize,
-    progress: u8,
-    current_path: Option<String>,
-    output_path: Option<String>,
-}
+// Progress, cancellation and single-input orchestration moved to `progress.rs`.
 
-fn emit_failed_progress<R: tauri::Runtime>(
-    app_handle: &tauri::AppHandle<R>,
-    task_id: &str,
-    total: usize,
-    completed: usize,
-    message: String,
-) {
-    emit_inference_progress(
-        app_handle,
-        task_id,
-        ProgressUpdate {
-            status: "failed",
-            message,
-            total,
-            completed,
-            progress: progress_for_completed(total, completed, 100),
-            current_path: None,
-            output_path: None,
-        },
-    );
-}
-
-fn progress_for_completed(total: usize, completed: usize, fallback: u8) -> u8 {
-    if total == 0 {
-        fallback
-    } else {
-        let value = ((completed * 100) / total).min(100);
-        u8::try_from(value).unwrap_or(100)
-    }
-}
-
-fn remove_cancelled_task(
-    cancelled_tasks: &Arc<Mutex<BTreeSet<String>>>,
-    task_id: &str,
-) {
-    if let Ok(mut cancelled) = cancelled_tasks.lock() {
-        cancelled.remove(task_id);
-    }
-}
-
-fn emit_single_input_status<R: tauri::Runtime>(
-    ctx: &SingleInputContext<'_, R>,
-    input_path: &str,
-    status: &'static str,
-    message: String,
-    progress: u8,
-) {
-    emit_inference_progress(
-        ctx.app_handle,
-        ctx.task_id,
-        ProgressUpdate {
-            status,
-            message,
-            total: ctx.total,
-            completed: ctx.index,
-            progress,
-            current_path: Some(input_path.to_string()),
-            output_path: None,
-        },
-    );
-}
-
-fn emit_cancelled_single_input<R: tauri::Runtime>(
-    ctx: &SingleInputContext<'_, R>,
-    input_path: &str,
-) {
-    emit_single_input_status(
-        ctx,
-        input_path,
-        "cancelled",
-        NATIVE_CANCELLED_MESSAGE.to_string(),
-        progress_for_completed(ctx.total, ctx.index, 0),
-    );
-}
-
-fn emit_failed_single_input<R: tauri::Runtime>(
-    ctx: &SingleInputContext<'_, R>,
-    input_path: &str,
-    message: String,
-) {
-    emit_single_input_status(
-        ctx,
-        input_path,
-        "failed",
-        message,
-        progress_for_completed(ctx.total, ctx.index, 0),
-    );
-}
-
-fn emit_inference_progress<R: tauri::Runtime>(
-    app_handle: &tauri::AppHandle<R>,
-    task_id: &str,
-    update: ProgressUpdate<'_>,
-) {
-    let ProgressUpdate {
-        status,
-        message,
-        total,
-        completed,
-        progress,
-        current_path,
-        output_path,
-    } = update;
-
-    let _ = app_handle.emit(
-        "fastsurfer://inference-progress",
-        InferenceProgressEvent {
-            task_id: task_id.to_string(),
-            status: status.to_string(),
-            message,
-            total,
-            completed,
-            progress,
-            current_path,
-            output_path,
-        },
-    );
-}
-
-struct SingleInputContext<'a, R: tauri::Runtime> {
-    app_handle: &'a tauri::AppHandle<R>,
-    cancelled_tasks: &'a Arc<Mutex<BTreeSet<String>>>,
-    task_id: &'a str,
-    sessions: &'a NativeOnnxSessions,
-    lut_ids: &'a [u16],
-    index: usize,
-    total: usize,
-}
-
-fn process_single_input<R: tauri::Runtime>(
-    ctx: &SingleInputContext<'_, R>,
+pub(crate) fn process_single_input<R: tauri::Runtime>(
+    ctx: &progress::SingleInputContext<'_, R>,
     input_path: &str,
 ) -> Result<NativeSingleResult, String> {
-    if is_task_cancelled(ctx.cancelled_tasks, ctx.task_id)? {
-        emit_cancelled_single_input(ctx, input_path);
-        remove_cancelled_task(ctx.cancelled_tasks, ctx.task_id);
-        return Err(cancelled_error());
+    if progress::is_task_cancelled(ctx.cancelled_tasks, ctx.task_id)? {
+        progress::emit_cancelled_single_input(ctx, input_path);
+        progress::remove_cancelled_task(ctx.cancelled_tasks, ctx.task_id);
+        return Err(progress::cancelled_error());
     }
 
     let should_cancel = || {
@@ -1985,10 +1249,10 @@ fn process_single_input<R: tauri::Runtime>(
                 u8::try_from(v).unwrap_or(99u8)
             };
 
-            emit_inference_progress(
+            progress::emit_inference_progress(
                 ctx.app_handle,
                 ctx.task_id,
-                ProgressUpdate {
+                progress::ProgressUpdate {
                     status: "item_progress",
                     message: file_message,
                     total: ctx.total,
@@ -2004,17 +1268,23 @@ fn process_single_input<R: tauri::Runtime>(
     match single {
         Ok(single) => Ok(single),
         Err(error) => {
-            let was_cancelled = error == NATIVE_CANCELLED_MESSAGE
-                || is_task_cancelled(ctx.cancelled_tasks, ctx.task_id)?;
+            let was_cancelled = error == progress::NATIVE_CANCELLED_MESSAGE
+                || progress::is_task_cancelled(
+                    ctx.cancelled_tasks,
+                    ctx.task_id,
+                )?;
 
             if was_cancelled {
-                emit_cancelled_single_input(ctx, input_path);
-                remove_cancelled_task(ctx.cancelled_tasks, ctx.task_id);
+                progress::emit_cancelled_single_input(ctx, input_path);
+                progress::remove_cancelled_task(
+                    ctx.cancelled_tasks,
+                    ctx.task_id,
+                );
 
-                return Err(cancelled_error());
+                return Err(progress::cancelled_error());
             }
 
-            emit_failed_single_input(ctx, input_path, error.clone());
+            progress::emit_failed_single_input(ctx, input_path, error.clone());
 
             Err(error)
         }
