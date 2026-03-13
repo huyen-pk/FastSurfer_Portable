@@ -1,9 +1,9 @@
-use crate::inference::pipeline::{ preprocess, postprocess, qc, progress};
-use crate::inference::{io, runtime};
 use crate::inference::entities::{
     InferenceArtifacts, InferenceOutput, InferencePlane, InferenceQc,
     InputVolume, ProcessingRunResult,
 };
+use crate::inference::pipeline::{postprocess, preprocess, progress, qc};
+use crate::inference::{io, runtime};
 use std::collections::{BTreeSet, HashMap};
 // Path types are provided by the io/runtime modules where needed.
 use std::sync::{Arc, Mutex};

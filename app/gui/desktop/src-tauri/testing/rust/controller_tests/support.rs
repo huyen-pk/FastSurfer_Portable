@@ -1,11 +1,11 @@
 // This test suite integrates with test-containers for environment isolation.
 use crate::backend::BackendState;
+use crate::inference::entities::InferencePlane;
 use crate::inference::pipeline::preprocess::{
     PreparedPlaneInput, load_input_volume, oriented_to_xyz,
     prepare_plane_input_for_slice, transformed_volume_shape,
 };
 use crate::inference::pipeline::run::run_native_inference;
-use crate::inference::entities::InferencePlane;
 use crate::process_mgmt::{
     BackendLaunchCommand, BackendProcess, resolve_python_executable,
 };

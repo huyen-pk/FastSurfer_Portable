@@ -1,5 +1,5 @@
-pub mod preprocess;
 pub mod postprocess;
-pub mod qc;
+pub mod preprocess;
 pub mod progress;
+pub mod qc;
 pub mod run;

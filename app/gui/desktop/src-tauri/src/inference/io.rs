@@ -1,5 +1,5 @@
-use crate::inference::pipeline::postprocess;
 use crate::inference::entities::InputVolume;
+use crate::inference::pipeline::postprocess;
 use ndarray::Array3;
 use nifti::writer::WriterOptions;
 use std::fs;

@@ -1,7 +1,6 @@
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use fastsurfer_desktop_lib::inference::{
-    onnx_loader_candle as onnx_loader,
-    pipeline::preprocess
+    onnx_loader_candle as onnx_loader, pipeline::preprocess,
 };
 use std::fs;
 use std::path::PathBuf;

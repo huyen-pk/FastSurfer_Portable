@@ -1,10 +1,10 @@
 use crate::backend::BackendState;
 use crate::feature_flags::InferenceEngine;
-use crate::inference::pipeline::run::{
-    run_native_inference, run_native_inference_with_progress,
-};
 use crate::inference::entities::{
     InferenceOutput, InferenceProgressEvent, ProcessingRunResult,
+};
+use crate::inference::pipeline::run::{
+    run_native_inference, run_native_inference_with_progress,
 };
 use crate::tasks::AppState;
 use std::collections::BTreeSet;
