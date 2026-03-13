@@ -8,7 +8,7 @@ use super::support::{
     python_has_nibabel_runtime, resolve_python_with_nibabel,
     run_native_inference_with_timeout,
 };
-use crate::inference::preprocess::{
+use crate::inference::pipeline::preprocess::{
     InferencePlane, load_input_volume, transformed_volume_shape,
 };
 use crate::prediction::run_fastsurfer_inference_with_backend;

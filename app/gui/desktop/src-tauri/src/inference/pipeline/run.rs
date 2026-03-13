@@ -1,8 +1,6 @@
-use crate::inference::postprocess;
-use crate::inference::preprocess;
-use crate::inference::qc::evaluate_qc;
-use crate::inference::{io, progress, runtime};
-use crate::models::{
+use crate::inference::pipeline::{ preprocess, postprocess, qc, progress};
+use crate::inference::{io, runtime};
+use crate::inference::entities::{
     InferenceArtifacts, InferenceOutput, InferencePlane, InferenceQc,
     InputVolume, ProcessingRunResult,
 };
@@ -124,7 +122,7 @@ fn finalize_native_result(
     let voxvol_mm3 = f64::from(volume.zoom_xyz[0])
         * f64::from(volume.zoom_xyz[1])
         * f64::from(volume.zoom_xyz[2]);
-    let qc = evaluate_qc(&pred_labels_xyz, volume.shape_xyz, voxvol_mm3)?;
+    let qc = qc::evaluate_qc(&pred_labels_xyz, volume.shape_xyz, voxvol_mm3)?;
 
     on_progress(100, "Rust ONNX inference completed.".to_string());
 

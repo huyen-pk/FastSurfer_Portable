@@ -5,7 +5,7 @@ use super::support::{
     fixture_native_input, is_ci, resolve_python_with_component_runtime,
     spawn_python_backend_inline,
 };
-use crate::inference::preprocess::load_input_volume;
+use crate::inference::pipeline::preprocess::load_input_volume;
 use serde_json::{Value, json};
 use std::process::Command;
 

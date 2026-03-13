@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-pub use crate::models::{InferencePlane, InputVolume, PreparedPlaneInput};
+pub use crate::inference::entities::{InferencePlane, InputVolume, PreparedPlaneInput};
 
 fn is_supported_native_input_path(path: &str) -> bool {
     let p = std::path::Path::new(path);

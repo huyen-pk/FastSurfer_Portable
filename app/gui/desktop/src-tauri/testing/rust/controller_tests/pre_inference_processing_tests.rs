@@ -3,7 +3,7 @@ use super::support::{
     create_backend_state_with_fake_responses, find_repo_root,
     fixture_native_input, next_test_id, resolve_python_with_component_runtime,
 };
-use crate::inference::preprocess::{
+use crate::inference::pipeline::preprocess::{
     InferencePlane, PreparedPlaneInput, load_input_volume,
     prepare_plane_input_for_slice,
 };

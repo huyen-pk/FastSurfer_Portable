@@ -3,7 +3,6 @@ pub mod backend;
 pub mod feature_flags;
 pub mod file_mgmt;
 pub mod inference;
-pub mod models;
 pub mod prediction;
 pub mod process_mgmt;
 pub mod tasks;

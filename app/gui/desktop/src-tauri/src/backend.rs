@@ -1,4 +1,4 @@
-use crate::models::{
+use crate::inference::entities::{
     InferenceArtifacts, InferenceOutput, InferenceQc, ProcessingRunResult,
 };
 use crate::process_mgmt::{

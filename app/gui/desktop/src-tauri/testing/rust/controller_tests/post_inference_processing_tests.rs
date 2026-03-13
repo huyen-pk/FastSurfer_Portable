@@ -3,11 +3,11 @@ use super::support::{
     create_backend_state_with_fake_responses, find_repo_root,
     fixture_python_pred, next_test_id, resolve_python_with_component_runtime,
 };
-use crate::inference::postprocess::{
+use crate::inference::pipeline::postprocess::{
     derive_aseg_from_pred, derive_brainmask_from_pred, flip_wm_islands,
     mask_aseg_with_brainmask,
 };
-use crate::inference::preprocess::load_input_volume;
+use crate::inference::pipeline::preprocess::load_input_volume;
 use std::fs;
 use std::io::Write;
 use std::process::Command;

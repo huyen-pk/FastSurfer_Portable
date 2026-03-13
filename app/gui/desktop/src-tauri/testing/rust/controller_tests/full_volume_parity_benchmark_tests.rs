@@ -5,11 +5,11 @@ use super::support::{
     python_has_nibabel_runtime, resolve_python_with_component_runtime,
     run_native_inference_with_timeout,
 };
-use crate::inference::postprocess::{
+use crate::inference::pipeline::postprocess::{
     derive_aseg_from_pred, derive_brainmask_from_pred, flip_wm_islands,
     mask_aseg_with_brainmask,
 };
-use crate::inference::preprocess::{
+use crate::inference::pipeline::preprocess::{
     InferencePlane, InputVolume, load_input_volume,
     prepare_plane_input_for_slice, transformed_volume_shape,
 };
