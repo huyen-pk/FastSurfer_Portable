@@ -5,6 +5,7 @@ use super::support::{
     python_has_nibabel_runtime, resolve_python_with_component_runtime,
     run_native_inference_with_timeout,
 };
+use crate::backend::legacy_run_fastsurfer_inference_core;
 use crate::inference::pipeline::postprocess::{
     derive_aseg_from_pred, derive_brainmask_from_pred, flip_wm_islands,
     mask_aseg_with_brainmask,
@@ -13,7 +14,6 @@ use crate::inference::pipeline::preprocess::{
     InferencePlane, InputVolume, load_input_volume,
     prepare_plane_input_for_slice, transformed_volume_shape,
 };
-use crate::prediction::legacy_run_fastsurfer_inference_with_backend;
 use crate::process_mgmt::{
     load_desktop_env, resolve_backend_launch_command_from,
 };
@@ -471,8 +471,9 @@ fn inference_stage_python(
     let backend = create_backend_state_via_process(child);
 
     let t0 = Instant::now();
-    let py_result = legacy_run_fastsurfer_inference_with_backend(
-        &backend,
+    let py_result = legacy_run_fastsurfer_inference_core(
+        Some(&backend),
+        None,
         &[input_path.to_string_lossy().to_string()],
         &[],
     )

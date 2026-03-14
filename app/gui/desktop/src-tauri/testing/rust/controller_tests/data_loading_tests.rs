@@ -8,6 +8,8 @@ use super::support::{
 use crate::inference::pipeline::preprocess::load_input_volume;
 use serde_json::{Value, json};
 use std::process::Command;
+use std::sync::Arc;
+use std::thread;
 
 fn parse_json_usize_list(parsed: &Value, key: &str) -> Vec<usize> {
     parsed[key]
@@ -140,6 +142,45 @@ fn run_ipc_request_with_non_json_prelude_should_wait_for_json_response() {
     assert_eq!(
         result.get("ack_message"),
         Some(&Value::String("Accepted".to_string()))
+    );
+
+    let output_lines = backend
+        .drain_output_lines()
+        .expect("expected output lines to be available");
+    assert_eq!(output_lines, vec!["backend log line".to_string()]);
+}
+
+#[test]
+fn run_ipc_requests_with_concurrent_interleaving_should_route_by_request_id() {
+    let backend = Arc::new(create_backend_state_via_shell_script(
+        "first=''; second=''; while IFS= read -r line; do if [ -z \"$first\" ]; then first=\"$line\"; continue; fi; second=\"$line\"; first_id=$(printf '%s' \"$first\" | sed -n 's/.*\"id\"[[:space:]]*:[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p'); second_id=$(printf '%s' \"$second\" | sed -n 's/.*\"id\"[[:space:]]*:[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p'); printf '{\"id\":%s,\"ok\":true,\"result\":{\"ack_message\":\"second\"}}\\n' \"$second_id\"; printf '{\"id\":%s,\"ok\":true,\"result\":{\"ack_message\":\"first\"}}\\n' \"$first_id\"; break; done",
+    ));
+
+    let first_backend = Arc::clone(&backend);
+    let first = thread::spawn(move || {
+        first_backend
+            .run_ipc_request("first", &json!({ "payload": 1 }))
+            .expect("expected first request to succeed")
+    });
+
+    let second_backend = Arc::clone(&backend);
+    let second = thread::spawn(move || {
+        second_backend
+            .run_ipc_request("second", &json!({ "payload": 2 }))
+            .expect("expected second request to succeed")
+    });
+
+    let first_result = first.join().expect("first request thread should join");
+    let second_result =
+        second.join().expect("second request thread should join");
+
+    assert_eq!(
+        first_result.get("ack_message"),
+        Some(&Value::String("first".to_string()))
+    );
+    assert_eq!(
+        second_result.get("ack_message"),
+        Some(&Value::String("second".to_string()))
     );
 }
 

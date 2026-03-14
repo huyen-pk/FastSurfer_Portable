@@ -26,6 +26,14 @@ pub struct BackendProcess {
     pub stdout: BufReader<ChildStdout>,
 }
 
+impl BackendProcess {
+    /// Splits the process into the child handle and owned stdio streams.
+    #[must_use]
+    pub fn into_parts(self) -> (Child, ChildStdin, BufReader<ChildStdout>) {
+        (self.child, self.stdin, self.stdout)
+    }
+}
+
 /// Spawns a new backend process with proper IO redirection and environment setup.
 ///
 /// # Arguments

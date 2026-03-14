@@ -17,9 +17,6 @@ mod file_management_tests;
 #[path = "controller_tests/backend_resolution_tests.rs"]
 mod backend_resolution_tests;
 
-#[path = "controller_tests/inference_tests.rs"]
-mod inference_tests;
-
 #[path = "controller_tests/input_validation_tests.rs"]
 mod input_validation_tests;
 

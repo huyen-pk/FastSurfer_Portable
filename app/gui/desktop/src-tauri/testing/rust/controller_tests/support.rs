@@ -12,10 +12,9 @@ use crate::process_mgmt::{
 use nifti::{IntoNdArray, NiftiObject, ReaderOptions};
 use std::fmt::Write as _;
 use std::fs;
-use std::io::{BufReader, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::atomic::AtomicU32;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::thread;
@@ -218,21 +217,18 @@ pub(super) fn create_backend_state_with_fake_responses(
         .take()
         .expect("failed to capture mock backend stdout");
 
-    let current_pid = child.id();
-
-    BackendState {
-        process: std::sync::Mutex::new(BackendProcess {
+    BackendState::from_process(
+        BackendProcess {
             child,
             stdin,
-            stdout: BufReader::new(stdout),
-        }),
-        launch: BackendLaunchCommand {
+            stdout: std::io::BufReader::new(stdout),
+        },
+        BackendLaunchCommand {
             program: "sh".to_string(),
             args: vec!["-c".to_string(), script],
         },
-        repo_root: None,
-        current_pid: AtomicU32::new(current_pid),
-    }
+        None,
+    )
 }
 
 pub(super) fn create_backend_state_via_shell_script(
@@ -256,21 +252,18 @@ pub(super) fn create_backend_state_via_shell_script(
         .take()
         .expect("failed to capture scripted mock backend stdout");
 
-    let current_pid = child.id();
-
-    BackendState {
-        process: std::sync::Mutex::new(BackendProcess {
+    BackendState::from_process(
+        BackendProcess {
             child,
             stdin,
-            stdout: BufReader::new(stdout),
-        }),
-        launch: BackendLaunchCommand {
+            stdout: std::io::BufReader::new(stdout),
+        },
+        BackendLaunchCommand {
             program: "sh".to_string(),
             args: vec!["-c".to_string(), script.to_string()],
         },
-        repo_root: None,
-        current_pid: AtomicU32::new(current_pid),
-    }
+        None,
+    )
 }
 
 pub(super) fn create_backend_state_via_process(
@@ -282,21 +275,18 @@ pub(super) fn create_backend_state_via_process(
         .take()
         .expect("failed to capture process stdout");
 
-    let current_pid = child.id();
-
-    BackendState {
-        process: std::sync::Mutex::new(BackendProcess {
+    BackendState::from_process(
+        BackendProcess {
             child,
             stdin,
-            stdout: BufReader::new(stdout),
-        }),
-        launch: BackendLaunchCommand {
+            stdout: std::io::BufReader::new(stdout),
+        },
+        BackendLaunchCommand {
             program: "unknown".to_string(),
             args: Vec::new(),
         },
-        repo_root: None,
-        current_pid: AtomicU32::new(current_pid),
-    }
+        None,
+    )
 }
 
 pub(super) fn spawn_python_backend_inline(
@@ -791,7 +781,7 @@ pub(super) fn run_native_inference_with_timeout(
     file_paths: &[String],
     folder_paths: &[String],
     timeout: Duration,
-) -> Result<crate::models::ProcessingRunResult, String> {
+) -> Result<crate::inference::entities::ProcessingRunResult, String> {
     let (tx, rx) = mpsc::channel();
     let files = file_paths.to_vec();
     let folders = folder_paths.to_vec();

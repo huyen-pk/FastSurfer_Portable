@@ -1,6 +1,6 @@
 // This test suite integrates with test-containers for environment isolation.
 use super::support::{find_repo_root, setup_test_app};
-use crate::inference::entities::InferenceProgressEvent;
+use crate::events::InferenceProgressEvent;
 use crate::inference::pipeline::run::run_native_inference_with_progress;
 use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex};

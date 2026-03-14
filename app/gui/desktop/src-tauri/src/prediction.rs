@@ -1,6 +1,6 @@
 use crate::backend::{
-    legacy_run_fastsurfer_inference_with_app_state,
-    legacy_run_fastsurfer_inference_with_progress_with_app_state,
+    legacy_run_fastsurfer_inference_core,
+    legacy_run_fastsurfer_inference_with_progress,
 };
 use crate::feature_flags::InferenceEngine;
 use crate::inference::entities::ProcessingRunResult;
@@ -35,7 +35,7 @@ pub async fn run_fastsurfer_inference(
     let backend_init_error = app_state.backend_init_error.clone();
 
     tauri::async_runtime::spawn_blocking(move || {
-        legacy_run_fastsurfer_inference_with_app_state(
+        legacy_run_fastsurfer_inference_core(
             backend.as_deref(),
             backend_init_error.as_deref(),
             &file_paths,
@@ -86,7 +86,7 @@ pub async fn run_fastsurfer_inference_with_progress(
     let cancelled_tasks = app_state.cancelled_tasks.clone();
 
     tauri::async_runtime::spawn_blocking(move || {
-        legacy_run_fastsurfer_inference_with_progress_with_app_state(
+        legacy_run_fastsurfer_inference_with_progress(
             &app_handle,
             backend.as_deref(),
             backend_init_error.as_deref(),

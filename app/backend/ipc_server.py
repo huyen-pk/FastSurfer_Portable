@@ -15,7 +15,11 @@ class FastSurferIPCServer:
 		self.inference_service = FastSurferInferenceService()
 		self._running = True
 
-	def _predict_from_path(self, params: dict[str, Any]) -> dict[str, Any]:
+	def _predict_from_path(
+		self,
+		params: dict[str, Any],
+		request_id: Any | None = None,
+	) -> dict[str, Any]:
 		input_path_raw = params.get("input_path")
 		if not input_path_raw:
 			raise ValueError("Missing required param: input_path")
@@ -39,6 +43,8 @@ class FastSurferIPCServer:
 				"progress": max(0, min(100, int(progress))),
 				"message": str(message or "Processing MRI"),
 			}
+			if request_id is not None:
+				payload["id"] = request_id
 			if task_id:
 				payload["task_id"] = task_id
 			sys.stdout.write(json.dumps(payload) + "\n")
@@ -101,7 +107,7 @@ class FastSurferIPCServer:
 			return {"id": request_id, "ok": True, "result": {"status": "ok"}}
 
 		if method == "predict":
-			result = self._predict_from_path(params)
+			result = self._predict_from_path(params, request_id=request_id)
 			return {"id": request_id, "ok": True, "result": result}
 
 		if method == "predict_bytes":

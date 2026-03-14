@@ -7,11 +7,12 @@ use crate::process_mgmt::{
     resolve_python_backend_script_path_from,
     resolve_repo_root_from_python_script, spawn_backend_process,
 };
-use crate::transport::{read_ipc_response, write_ipc_request};
+use crate::transport::Transport;
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
 use std::path::Path;
 use std::path::PathBuf;
+use std::process::Child;
 use std::process::Command;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
@@ -20,10 +21,12 @@ use std::time::Duration;
 use tauri::{AppHandle, Emitter, Runtime};
 
 /// Main state wrapper for the persistent backend process.
-/// Handles lifecycle management (spawn, restart, kill) and High-level RPC calls.
+/// Handles lifecycle management (spawn, restart, kill) and High-level IPC calls.
 pub struct BackendState {
-    /// Mutex for thread-safe access to the single backend process instance.
-    pub process: Mutex<BackendProcess>,
+    /// Shared transport wrapper for request/response IPC.
+    pub transport: Mutex<Arc<Transport>>,
+    /// Child handle retained for process lifecycle operations.
+    pub child: Mutex<Option<Child>>,
     /// Configuration used to launch (or relaunch) the backend.
     pub launch: BackendLaunchCommand,
     /// Detected repository root path (useful for development mode python path resolution).
@@ -147,12 +150,68 @@ fn progress_from_event(value: &Value) -> usize {
 }
 
 impl BackendState {
+    #[must_use]
+    fn from_backend_process(
+        process: BackendProcess,
+        launch: BackendLaunchCommand,
+        repo_root: Option<PathBuf>,
+    ) -> Self {
+        let (child, stdin, stdout) = process.into_parts();
+        let current_pid = child.id();
+
+        Self {
+            transport: Mutex::new(Arc::new(Transport::new(stdin, stdout))),
+            child: Mutex::new(Some(child)),
+            launch,
+            repo_root,
+            current_pid: AtomicU32::new(current_pid),
+        }
+    }
+
+    #[must_use]
+    pub fn from_process(
+        process: BackendProcess,
+        launch: BackendLaunchCommand,
+        repo_root: Option<PathBuf>,
+    ) -> Self {
+        Self::from_backend_process(process, launch, repo_root)
+    }
+
+    fn active_transport(&self) -> Result<Arc<Transport>, String> {
+        self.transport
+            .lock()
+            .map(|transport| Arc::clone(&*transport))
+            .map_err(|_| "Backend transport mutex was poisoned".to_string())
+    }
+
+    fn clear_child_handle(&self) {
+        if let Ok(mut child_guard) = self.child.lock()
+            && let Some(mut child) = child_guard.take()
+        {
+            let _ = child.wait();
+        }
+    }
+
+    fn close_active_transport(&self) {
+        if let Ok(transport) = self.active_transport() {
+            transport.close();
+        }
+    }
+
+    /// Drains any non-IPC stdout lines captured by the transport log channel.
+    ///
+    /// # Errors
+    /// Returns an error when the active transport cannot be accessed.
+    pub fn drain_output_lines(&self) -> Result<Vec<String>, String> {
+        Ok(self.active_transport()?.drain_output_lines())
+    }
+
     /// Initializes the backend state by resolving paths and spawning the initial process.
-    /// Performs an immediate "health" check RPC call to verify readiness.
+    /// Performs an immediate "health" check IPC call to verify readiness.
     ///
     /// # Errors
     /// Returns an error when process launch, backend path resolution, or the
-    /// initial health RPC check fails.
+    /// initial health IPC check fails.
     pub fn new() -> Result<Self, String> {
         let cwd = std::env::current_dir()
             .map_err(|e| format!("Cannot resolve current dir: {e}"))?;
@@ -173,14 +232,7 @@ impl BackendState {
 
         let launch = resolve_backend_launch_command_from(&cwd, exe_dir)?;
         let process = spawn_backend_process(&launch, repo_root.as_ref())?;
-        let current_pid = process.child.id();
-
-        let backend = Self {
-            process: Mutex::new(process),
-            launch,
-            repo_root,
-            current_pid: AtomicU32::new(current_pid),
-        };
+        let backend = Self::from_backend_process(process, launch, repo_root);
 
         let request = json!({});
         backend.run_ipc_request("health", &request).map_err(|e| {
@@ -190,17 +242,11 @@ impl BackendState {
         Ok(backend)
     }
 
-    /// Executes a JSON-RPC method that may return intermediate progress updates.
-    ///
-    /// # Arguments
-    /// * `method` - The RPC method name (e.g., "predict").
-    /// * `params` - The JSON parameters for the method.
-    /// * `on_progress` - Optional callback for handling "progress" events.
+    /// Sends a single IPC request and emits correlated progress updates.
     ///
     /// # Errors
-    /// Returns an error when the backend mutex is poisoned, the request cannot
-    /// be written, the response is malformed, or the backend reports an RPC
-    /// failure.
+    /// Returns an error when the transport cannot queue the request, the backend
+    /// reports an error response, or the response stream terminates unexpectedly.
     pub fn run_ipc_request_with_progress(
         &self,
         method: &str,
@@ -210,19 +256,10 @@ impl BackendState {
         eprintln!(
             "[trace][backend] run_ipc_request_with_progress method={method}"
         );
-        let mut process = self
-            .process
-            .lock()
-            .map_err(|_| "Backend process mutex was poisoned".to_string())?;
-
-        let request = json!({
-            "id": 1,
-            "method": method,
-            "params": params,
-        });
-
-        write_ipc_request(&mut process, &request)?;
-        let response = read_ipc_response(&mut process, &mut on_progress)?;
+        let transport = self.active_transport()?;
+        let pending = transport.send_request(method, params)?;
+        let response =
+            transport.read_ipc_response(pending, &mut on_progress)?;
 
         if !response.get("ok").and_then(Value::as_bool).unwrap_or(false) {
             let error_msg = response
@@ -239,10 +276,11 @@ impl BackendState {
             .ok_or_else(|| "Missing result field in IPC response".to_string())
     }
 
-    /// Executes a simple JSON-RPC method without progress tracking.
+    /// Sends a single IPC request and waits for the final response.
     ///
     /// # Errors
-    /// Returns an error when the backend RPC request fails.
+    /// Returns an error when the transport request fails or the backend returns
+    /// an error payload.
     pub fn run_ipc_request(
         &self,
         method: &str,
@@ -251,31 +289,22 @@ impl BackendState {
         self.run_ipc_request_with_progress(method, params, None)
     }
 
-    /// Restarts the backend subprocess.
-    /// Used when the previous process has crashed, been killed, or is unresponsive.
+    /// Restarts the active backend process after verifying the replacement health check.
     ///
     /// # Errors
-    /// Returns an error when restarting the subprocess or re-running the health
-    /// check fails.
+    /// Returns an error when the replacement backend cannot be spawned or does
+    /// not pass the health check.
     pub fn restart_backend_process(&self) -> Result<(), String> {
-        let mut process_guard = self
-            .process
-            .lock()
-            .map_err(|_| "Backend process mutex was poisoned".to_string())?;
-
-        let mut new_process =
+        let new_process =
             spawn_backend_process(&self.launch, self.repo_root.as_ref())?;
-        write_ipc_request(
-            &mut new_process,
-            &json!({
-                "id": 1,
-                "method": "health",
-                "params": {},
-            }),
-        )?;
+        let (new_child, new_stdin, new_stdout) = new_process.into_parts();
+        let new_pid = new_child.id();
+        let new_transport = Arc::new(Transport::new(new_stdin, new_stdout));
 
+        let pending = new_transport.send_request("health", &json!({}))?;
         let mut no_progress: Option<&mut dyn FnMut(Value)> = None;
-        let response = read_ipc_response(&mut new_process, &mut no_progress)?;
+        let response =
+            new_transport.read_ipc_response(pending, &mut no_progress)?;
         if !response.get("ok").and_then(Value::as_bool).unwrap_or(false) {
             let error_msg = response
                 .get("error")
@@ -287,17 +316,27 @@ impl BackendState {
             ));
         }
 
-        let old_pid = process_guard.child.id();
-        let _ = process_guard.child.kill();
-        let _ = process_guard.child.wait();
+        let old_transport = {
+            let mut transport_guard = self.transport.lock().map_err(|_| {
+                "Backend transport mutex was poisoned".to_string()
+            })?;
+            std::mem::replace(&mut *transport_guard, new_transport)
+        };
+        let old_child = {
+            let mut child_guard = self
+                .child
+                .lock()
+                .map_err(|_| "Backend child mutex was poisoned".to_string())?;
+            child_guard.replace(new_child)
+        };
 
-        self.current_pid
-            .store(new_process.child.id(), Ordering::SeqCst);
-        *process_guard = new_process;
+        self.current_pid.store(new_pid, Ordering::SeqCst);
 
-        if old_pid != 0 {
-            let _ = old_pid;
+        if let Some(mut child) = old_child {
+            let _ = child.kill();
+            let _ = child.wait();
         }
+        old_transport.close();
 
         Ok(())
     }
@@ -324,6 +363,8 @@ impl BackendState {
             match gentle {
                 Ok(status) if status.success() => {
                     self.current_pid.store(0, Ordering::SeqCst);
+                    self.clear_child_handle();
+                    self.close_active_transport();
                     return Ok(());
                 }
                 _ => {
@@ -353,6 +394,8 @@ impl BackendState {
             {
                 thread::sleep(Duration::from_millis(250));
                 self.current_pid.store(0, Ordering::SeqCst);
+                self.clear_child_handle();
+                self.close_active_transport();
                 return Ok(());
             }
 
@@ -368,6 +411,8 @@ impl BackendState {
         }
 
         self.current_pid.store(0, Ordering::SeqCst);
+        self.clear_child_handle();
+        self.close_active_transport();
 
         Ok(())
     }
@@ -378,13 +423,11 @@ impl BackendState {
     /// Returns an error when the backend cannot be terminated after the best
     /// effort shutdown request.
     pub fn shutdown_for_exit(&self) -> Result<(), String> {
-        if let Ok(mut process) = self.process.try_lock() {
-            let request = json!({
-                "id": 1,
-                "method": "shutdown",
-                "params": {},
-            });
-            let _ = write_ipc_request(&mut process, &request);
+        if let Ok(transport) = self.active_transport()
+            && let Ok(pending) = transport.send_request("shutdown", &json!({}))
+        {
+            let mut no_progress: Option<&mut dyn FnMut(Value)> = None;
+            let _ = transport.read_ipc_response(pending, &mut no_progress);
         }
 
         self.force_stop_current_process()
@@ -481,14 +524,10 @@ impl BackendState {
 
         let result_directories = collect_result_directories(&results);
 
-        let ack_message = if result_directories.is_empty() {
-            ack_message_from_backend
-        } else {
-            format!(
-                "{ack_message_from_backend} Results directory: {}",
-                result_directories.join(", ")
-            )
-        };
+        let ack_message = finalize_ack_message(
+            &ack_message_from_backend,
+            &result_directories,
+        );
 
         Ok(ProcessingRunResult {
             ack_message,
@@ -505,7 +544,7 @@ impl BackendState {
     /// Predicts a single file, streaming progress events via the provided closure.
     ///
     /// # Errors
-    /// Returns an error when the prediction RPC fails or the response omits
+    /// Returns an error when the prediction IPC fails or the response omits
     /// required inference output fields.
     pub fn predict_single_path(
         &self,
@@ -699,7 +738,7 @@ fn add_result_directory(set: &mut BTreeSet<String>, path: &str) {
     }
 }
 
-fn legacy_finalize_ack_message(start_ack: &str, dirs: &[String]) -> String {
+fn finalize_ack_message(start_ack: &str, dirs: &[String]) -> String {
     if dirs.is_empty() {
         start_ack.to_string()
     } else {
@@ -806,12 +845,15 @@ fn legacy_process_requested_paths(
     Ok((results, result_directories))
 }
 
-/// Helper that orchestrates the batch prediction flow by calling the backend.
-pub(crate) fn legacy_run_fastsurfer_inference_with_backend(
-    backend: &BackendState,
+/// Wrapper for inference that checks for backend availability first.
+pub(crate) fn legacy_run_fastsurfer_inference_core(
+    backend: Option<&BackendState>,
+    backend_init_error: Option<&str>,
     file_paths: &[String],
     folder_paths: &[String],
 ) -> Result<ProcessingRunResult, String> {
+    let backend = ensure_backend(backend, backend_init_error)?;
+
     eprintln!(
         "[trace][prediction] run_fastsurfer_inference_with_backend start file_paths={} folder_paths={}",
         file_paths.len(),
@@ -834,26 +876,6 @@ pub(crate) fn legacy_run_fastsurfer_inference_with_backend(
     )
 }
 
-/// Wrapper for inference that checks for backend availability first.
-pub(crate) fn legacy_run_fastsurfer_inference_with_app_state(
-    backend: Option<&BackendState>,
-    backend_init_error: Option<&str>,
-    file_paths: &[String],
-    folder_paths: &[String],
-) -> Result<ProcessingRunResult, String> {
-    let backend = backend.ok_or_else(|| {
-        let detail = backend_init_error
-            .unwrap_or("unknown backend initialization error");
-        format!("Backend is unavailable in this desktop runtime: {detail}")
-    })?;
-
-    legacy_run_fastsurfer_inference_with_backend(
-        backend,
-        file_paths,
-        folder_paths,
-    )
-}
-
 /// Advanced inference runner that supports granular progress tracking and cancellation.
 ///
 /// Iterates through the requested items one by one, updating the UI via events.
@@ -862,7 +884,7 @@ pub(crate) fn legacy_run_fastsurfer_inference_with_app_state(
 /// # Errors
 /// Returns an error when backend inference startup, per-item processing, or
 /// event-driven cancellation handling fails.
-pub fn legacy_run_fastsurfer_inference_with_progress_with_app_state(
+pub fn legacy_run_fastsurfer_inference_with_progress(
     app_handle: &AppHandle,
     backend: Option<&BackendState>,
     backend_init_error: Option<&str>,
@@ -896,7 +918,7 @@ pub fn legacy_run_fastsurfer_inference_with_progress_with_app_state(
     let result_directories =
         result_directories.into_iter().collect::<Vec<String>>();
     let ack_message =
-        legacy_finalize_ack_message(&start_ack_message, &result_directories);
+        finalize_ack_message(&start_ack_message, &result_directories);
 
     emit_progress_event(
         app_handle,

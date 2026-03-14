@@ -197,3 +197,22 @@ fn progress_events_should_be_monotonically_increasing_in_typical_workflow() {
         );
     }
 }
+
+#[test]
+fn progress_callback_should_return_error_when_backend_exits_mid_stream() {
+    let backend = create_backend_state_via_shell_script(
+        "while IFS= read -r _line; do printf '%s\\n' '{\"event\":\"progress\",\"progress\":25,\"message\":\"Starting\"}'; exit 0; done",
+    );
+
+    let mut captured: Vec<(usize, String)> = Vec::new();
+    let result = backend.predict_single_path(
+        "/in/test.mgz",
+        "mid-stream-exit-test",
+        Some(&mut |progress, message| {
+            captured.push((progress, message));
+        }),
+    );
+
+    assert!(result.is_err());
+    assert_eq!(captured, vec![(25, "Starting".to_string())]);
+}

@@ -1,5 +1,5 @@
 // This test suite integrates with test-containers for environment isolation.
-use crate::prediction::legacy_run_fastsurfer_inference_with_app_state;
+use crate::backend::legacy_run_fastsurfer_inference_core;
 use crate::process_mgmt::{
     resolve_backend_binary_path_from, resolve_backend_launch_command_from,
 };
@@ -84,7 +84,7 @@ fn run_fastsurfer_inference_with_unavailable_backend_should_return_clear_error()
 {
     let input_paths = vec!["/in/a.nii.gz".to_string()];
     let empty: Vec<String> = Vec::new();
-    let result = legacy_run_fastsurfer_inference_with_app_state(
+    let result = legacy_run_fastsurfer_inference_core(
         None,
         Some("Could not resolve backend launch command"),
         &input_paths,
