@@ -1,12 +1,13 @@
 use serde::{Deserialize, Serialize};
 use tauri::{Emitter, Runtime};
 
+pub const INFERENCE_PROGRESS_EVENT: &str = "fastsurfer://inference-progress";
+
 pub fn emit<T: Emitter<R>, R: Runtime, S: Serialize + Clone>(
     event_handler: &T,
     event_payload: S,
 ) {
-    let _ =
-        event_handler.emit("fastsurfer://inference-progress", event_payload);
+    let _ = event_handler.emit(INFERENCE_PROGRESS_EVENT, event_payload);
 }
 
 /// Event payload for tracking the progress of an inference task.

@@ -1,7 +1,7 @@
 // This test suite integrates with test-containers for environment isolation.
 use super::support::{
-    create_backend_state_with_fake_responses, find_repo_root,
-    fixture_python_pred, next_test_id, resolve_python_with_component_runtime,
+    find_repo_root, fixture_python_pred, next_test_id,
+    resolve_python_with_component_runtime, spawn_bundled_backend_state,
 };
 use crate::inference::pipeline::postprocess::{
     derive_aseg_from_pred, derive_brainmask_from_pred, flip_wm_islands,
@@ -118,34 +118,32 @@ print(
 }
 
 #[test]
-fn predict_batch_with_result_entries_should_return_ack_and_deduplicated_directories()
- {
-    let backend = create_backend_state_with_fake_responses(&[
-        r#"{"ok":true,"result":{"ack_message":"done","requested_paths":["x"],"results":[{"input_path":"/in/a.nii.gz","output_path":"/tmp/out/a.mgz","output_filename":"a.mgz","run_result":"ok"},{"input_path":"/in/b.nii.gz","output_path":"/tmp/out/b.mgz","output_filename":"b.mgz","run_result":1}]}}"#,
-    ]);
+fn predict_batch_with_invalid_input_should_return_backend_error() {
+    let backend = spawn_bundled_backend_state()
+        .expect("expected bundled backend to start");
 
-    let result = backend
-        .predict_batch(&[], &[], "fallback", &["fallback_path".to_string()])
-        .expect("expected predict_batch to succeed");
+    let result = backend.predict_batch(&[], &[], None, None);
 
-    assert_eq!(result.ack_message, "done Results directory: /tmp/out");
-    assert_eq!(result.requested_paths, vec!["x".to_string()]);
-    assert_eq!(result.result_directories, vec!["/tmp/out".to_string()]);
-    assert_eq!(result.results.len(), 2);
+    let Err(error) = result else {
+        panic!("expected predict_batch to fail for invalid input");
+    };
+    assert_eq!(
+        error,
+        "Backend predict_batch failed: No valid input image files selected (.nii, .nii.gz, .mgz, .mgh)."
+    );
 }
 
 #[test]
-fn predict_batch_without_requested_paths_should_use_fallback_requested_paths() {
-    let backend = create_backend_state_with_fake_responses(&[
-        r#"{"ok":true,"result":{"ack_message":"done","results":[{"input_path":"/in/a.nii.gz","output_path":"/tmp/out/a.mgz","output_filename":"a.mgz","run_result":"ok"}]}}"#,
-    ]);
+fn predict_batch_with_invalid_paths_should_ignore_fallback_requested_paths() {
+    let backend = spawn_bundled_backend_state()
+        .expect("expected bundled backend to start");
 
-    let fallback_paths = vec!["fallback/path".to_string()];
-    let result = backend
-        .predict_batch(&[], &[], "fallback-ack", &fallback_paths)
-        .expect("expected predict_batch to succeed");
+    let result = backend.predict_batch(&[], &[], None, None);
 
-    assert_eq!(result.requested_paths, fallback_paths);
+    let Err(error) = result else {
+        panic!("expected predict_batch to fail for invalid input paths");
+    };
+    assert!(error.contains("No valid input image files selected"));
 }
 
 #[test]

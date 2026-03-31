@@ -329,7 +329,7 @@ class FastSurferInferenceService:
         if return_base64:
             result["output_base64"] = base64.b64encode(seg_path.read_bytes()).decode("utf-8")
         return result
-
+  
     def predict_batch_from_paths(self, *, file_paths: list[str], folder_paths: list[str]) -> dict[str, Any]:
         requested_paths = self.resolve_input_paths(file_paths=file_paths, folder_paths=folder_paths)
         if not requested_paths:

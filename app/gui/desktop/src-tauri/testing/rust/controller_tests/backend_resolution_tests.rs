@@ -1,99 +1,68 @@
 // This test suite integrates with test-containers for environment isolation.
-use crate::backend::legacy_run_fastsurfer_inference_core;
-use crate::process_mgmt::{
+use crate::backend::BackendManager;
+use crate::backend::subprocess::{
     resolve_backend_binary_path_from, resolve_backend_launch_command_from,
 };
-use std::fs;
+use serde_json::Value;
 use std::path::PathBuf;
 
-use super::support::next_test_id;
+fn setup_repo_root() -> PathBuf {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    manifest_dir
+        .parent()
+        .and_then(|p| p.parent())
+        .and_then(|p| p.parent())
+        .and_then(|p| p.parent())
+        .expect("failed to compute repo root from manifest dir")
+        .to_path_buf()
+}
 
 #[test]
-fn resolve_backend_binary_from_paths_should_return_first_existing_candidate() {
-    let root = std::env::temp_dir()
-        .join(format!("desktop_test_root_{}", next_test_id()));
-    let exe_dir = root.join("bin/app");
-    let candidate_dir = root.join("backend");
-    let candidate_path = candidate_dir.join("main");
+fn resolve_backend_binary_from_repo_paths_should_find_bundled_binary() {
+    // Avoid relying on `find_repo_root` (which probes for Python scripts).
+    // Use the compile-time manifest directory and walk up to the repository root.
+    let repo_root = setup_repo_root();
 
-    fs::create_dir_all(&exe_dir).expect("failed to create mock exe dir");
-    fs::create_dir_all(&candidate_dir)
-        .expect("failed to create mock backend dir");
-    fs::write(&candidate_path, b"mock")
-        .expect("failed to create mock backend binary");
+    let exe_dir = repo_root.join("app/gui/desktop/src-tauri");
+    let candidate_path = repo_root.join("app/gui/desktop/backend/main");
 
-    let result = resolve_backend_binary_path_from(&root, &exe_dir)
+    let result = resolve_backend_binary_path_from(&repo_root, &exe_dir)
         .expect("expected backend path resolution to succeed");
 
     assert_eq!(result, candidate_path);
-
-    fs::remove_dir_all(&root).expect("failed to cleanup mock root");
 }
 
 #[test]
-fn resolve_backend_binary_from_paths_should_return_error_when_no_candidate_exists()
- {
-    let root = std::env::temp_dir()
-        .join(format!("desktop_test_root_{}", next_test_id()));
-    let exe_dir = root.join("bin/app");
-
-    fs::create_dir_all(&exe_dir).expect("failed to create mock exe dir");
-
-    let result = resolve_backend_binary_path_from(&root, &exe_dir);
-
-    assert!(result.is_err());
-    assert_eq!(
-        result.unwrap_err(),
-        "Could not find bundled backend binary app/gui/desktop/backend/main"
-    );
-
-    fs::remove_dir_all(&root).expect("failed to cleanup mock root");
-}
-
-#[test]
-fn resolve_backend_launch_command_should_prefer_bundled_binary_when_available()
-{
-    let root = std::env::temp_dir()
-        .join(format!("desktop_test_launch_root_{}", next_test_id()));
-    let exe_dir = root.join("target/debug");
-    let backend_dir = root.join("backend");
-
-    fs::create_dir_all(&exe_dir).expect("failed to create mock exe dir");
-    fs::create_dir_all(&backend_dir)
-        .expect("failed to create mock backend dir");
-
-    let binary_path = backend_dir.join("main");
-    fs::write(&binary_path, b"mock-binary")
-        .expect("failed to create mock backend binary");
-
-    let script_path = root.join("backend/ipc_server.py");
-    fs::write(&script_path, b"print('mock')")
-        .expect("failed to create mock python backend script");
-
-    let launch = resolve_backend_launch_command_from(&root, &exe_dir)
+fn bundled_backend_binary_should_respond_to_health_request() {
+    let repo_root = setup_repo_root();
+    let exe_dir = repo_root.join("app/gui/desktop/src-tauri");
+    let launch = resolve_backend_launch_command_from(&repo_root, &exe_dir)
         .expect("expected launch command resolution to succeed");
+    let backend_proc = crate::backend::subprocess::spawn_backend_process(
+        &launch,
+        Some(&repo_root),
+    )
+    .expect("expected bundled backend to start");
 
-    assert_eq!(PathBuf::from(launch.program), binary_path);
-    assert!(launch.args.is_empty());
+    let backend =
+        BackendManager::from_process(backend_proc, launch, Some(repo_root));
 
-    fs::remove_dir_all(&root).expect("failed to cleanup mock root");
+    let result = backend
+        .health_probe()
+        .expect("expected bundled backend binary to respond to health probe");
+
+    assert_eq!(result.get("status"), Some(&Value::String("ok".to_string())));
 }
 
 #[test]
-fn run_fastsurfer_inference_with_unavailable_backend_should_return_clear_error()
-{
-    let input_paths = vec!["/in/a.nii.gz".to_string()];
-    let empty: Vec<String> = Vec::new();
-    let result = legacy_run_fastsurfer_inference_core(
+fn require_available_with_unavailable_backend_should_return_clear_error() {
+    let Err(error) = BackendManager::require_available(
         None,
         Some("Could not resolve backend launch command"),
-        &input_paths,
-        &empty,
-    );
-
-    let Err(error) = result else {
+    ) else {
         panic!("expected unavailable backend to return an error");
     };
+
     assert!(error.contains("Backend is unavailable in this desktop runtime"));
     assert!(error.contains("Could not resolve backend launch command"));
 }

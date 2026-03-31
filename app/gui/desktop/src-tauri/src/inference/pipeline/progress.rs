@@ -1,7 +1,6 @@
-use crate::events::InferenceProgressEvent;
+use crate::events::{self, InferenceProgressEvent};
 use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex};
-use tauri::Emitter;
 
 pub(crate) const NATIVE_CANCELLED_MESSAGE: &str = "Task cancelled by user.";
 
@@ -115,8 +114,8 @@ pub(crate) fn emit_inference_progress<R: tauri::Runtime>(
         output_path,
     } = update;
 
-    let _ = app_handle.emit(
-        "fastsurfer://inference-progress",
+    events::emit(
+        app_handle,
         InferenceProgressEvent {
             task_id: task_id.to_string(),
             status: status.to_string(),

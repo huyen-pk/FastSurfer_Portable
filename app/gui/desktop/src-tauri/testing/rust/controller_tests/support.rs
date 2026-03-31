@@ -1,28 +1,55 @@
+#![allow(dead_code)]
+
 // This test suite integrates with test-containers for environment isolation.
-use crate::backend::BackendState;
+use crate::backend::BackendManager;
+use crate::backend::subprocess::{
+    BackendLaunchCommand, BackendProcess, resolve_backend_launch_command_from,
+    spawn_backend_process,
+};
 use crate::inference::entities::InferencePlane;
 use crate::inference::pipeline::preprocess::{
     PreparedPlaneInput, load_input_volume, oriented_to_xyz,
     prepare_plane_input_for_slice, transformed_volume_shape,
 };
-use crate::inference::pipeline::run::run_native_inference;
-use crate::process_mgmt::{
-    BackendLaunchCommand, BackendProcess, resolve_python_executable,
-};
 use nifti::{IntoNdArray, NiftiObject, ReaderOptions};
-use std::fmt::Write as _;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::mpsc;
-use std::thread;
-use std::time::Duration;
 
 pub(super) fn next_test_id() -> usize {
     static NEXT_ID: AtomicUsize = AtomicUsize::new(1);
     NEXT_ID.fetch_add(1, Ordering::Relaxed)
+}
+
+fn resolve_python_executable_test() -> Option<String> {
+    let mut candidates: Vec<String> = Vec::new();
+
+    if let Ok(py_bin) = std::env::var("FASTSURFER_PYTHON_BIN")
+        && !py_bin.trim().is_empty()
+    {
+        candidates.push(py_bin);
+    }
+
+    if let Ok(py_bin) = std::env::var("PYTHON_BIN")
+        && !py_bin.trim().is_empty()
+    {
+        candidates.push(py_bin);
+    }
+
+    candidates.push("python3".to_string());
+    candidates.push("python".to_string());
+
+    candidates.into_iter().find(|candidate| {
+        Command::new(candidate)
+            .arg("--version")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok()
+    })
 }
 
 fn round_f32_to_i32(value: f32) -> i32 {
@@ -186,96 +213,16 @@ if not np.allclose(rust_image, py_image, rtol=0.0, atol=1e-6):
     Ok(())
 }
 
-pub(super) fn create_backend_state_with_fake_responses(
-    responses: &[&str],
-) -> BackendState {
-    let mut branches = String::new();
-    for (index, response) in responses.iter().enumerate() {
-        write!(branches, "{index}) printf '%s\\n' '{response}' ;;")
-            .expect("writing response branch should succeed");
-    }
-
-    let script = format!(
-        "i=0; while IFS= read -r _line; do case \"$i\" in {branches} *) printf '%s\\n' '{{\"ok\":false,\"error\":{{\"message\":\"unexpected request\"}}}}' ;; esac; i=$((i+1)); done"
-    );
-
-    let mut child = Command::new("sh")
-        .arg("-c")
-        .arg(script.clone())
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
-        .spawn()
-        .expect("failed to spawn fake backend process");
-
-    let stdin = child
-        .stdin
-        .take()
-        .expect("failed to capture mock backend stdin");
-    let stdout = child
-        .stdout
-        .take()
-        .expect("failed to capture mock backend stdout");
-
-    BackendState::from_process(
-        BackendProcess {
-            child,
-            stdin,
-            stdout: std::io::BufReader::new(stdout),
-        },
-        BackendLaunchCommand {
-            program: "sh".to_string(),
-            args: vec!["-c".to_string(), script],
-        },
-        None,
-    )
-}
-
-pub(super) fn create_backend_state_via_shell_script(
-    script: &str,
-) -> BackendState {
-    let mut child = Command::new("sh")
-        .arg("-c")
-        .arg(script)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
-        .spawn()
-        .expect("failed to spawn scripted mock backend process");
-
-    let stdin = child
-        .stdin
-        .take()
-        .expect("failed to capture scripted mock backend stdin");
-    let stdout = child
-        .stdout
-        .take()
-        .expect("failed to capture scripted mock backend stdout");
-
-    BackendState::from_process(
-        BackendProcess {
-            child,
-            stdin,
-            stdout: std::io::BufReader::new(stdout),
-        },
-        BackendLaunchCommand {
-            program: "sh".to_string(),
-            args: vec!["-c".to_string(), script.to_string()],
-        },
-        None,
-    )
-}
-
 pub(super) fn create_backend_state_via_process(
     mut child: std::process::Child,
-) -> BackendState {
+) -> BackendManager {
     let stdin = child.stdin.take().expect("failed to capture process stdin");
     let stdout = child
         .stdout
         .take()
         .expect("failed to capture process stdout");
 
-    BackendState::from_process(
+    BackendManager::from_process(
         BackendProcess {
             child,
             stdin,
@@ -289,33 +236,33 @@ pub(super) fn create_backend_state_via_process(
     )
 }
 
-pub(super) fn spawn_python_backend_inline(
-    script: &str,
-) -> Option<BackendState> {
-    let python = resolve_python_executable()?;
-    let child = Command::new(python)
-        .arg("-u")
-        .arg("-c")
-        .arg(script)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
-        .spawn()
-        .ok()?;
+pub(super) fn spawn_bundled_backend_state() -> Result<BackendManager, String> {
+    let repo_root = find_repo_root()
+        .ok_or_else(|| "failed to locate repo root".to_string())?;
 
-    Some(create_backend_state_via_process(child))
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(std::path::Path::to_path_buf))
+        .unwrap_or_else(|| repo_root.clone());
+
+    let launch = resolve_backend_launch_command_from(&repo_root, &exe_dir)?;
+    let backend_proc = spawn_backend_process(&launch, Some(&repo_root))?;
+
+    Ok(BackendManager::from_process(
+        backend_proc,
+        launch,
+        Some(repo_root),
+    ))
 }
 
 pub(super) fn find_repo_root() -> Option<PathBuf> {
-    let mut current = std::env::current_dir().ok()?;
-    loop {
-        if current.join("app/backend/ipc_server.py").exists() {
-            return Some(current);
-        }
-        if !current.pop() {
-            return None;
-        }
-    }
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    manifest_dir
+        .parent()
+        .and_then(|p| p.parent())
+        .and_then(|p| p.parent())
+        .and_then(|p| p.parent())
+        .map(std::path::Path::to_path_buf)
 }
 
 pub(super) fn is_ci() -> bool {
@@ -362,7 +309,7 @@ pub(super) fn python_has_nibabel_runtime(
 
 pub(super) fn resolve_python_with_nibabel(repo_root: &Path) -> Option<String> {
     let mut candidates = Vec::<String>::new();
-    if let Some(resolved) = resolve_python_executable() {
+    if let Some(resolved) = resolve_python_executable_test() {
         candidates.push(resolved);
     }
     candidates.push("/home/huyenpk/anaconda3/bin/python".to_string());
@@ -377,7 +324,7 @@ pub(super) fn resolve_python_with_component_runtime(
     repo_root: &Path,
 ) -> Option<String> {
     let mut candidates = Vec::<String>::new();
-    if let Some(resolved) = resolve_python_executable() {
+    if let Some(resolved) = resolve_python_executable_test() {
         candidates.push(resolved);
     }
     candidates.push("/home/huyenpk/anaconda3/bin/python".to_string());
@@ -774,32 +721,6 @@ pub(super) fn configured_slice_indices(total_slices: usize) -> Vec<usize> {
         vec![total_slices / 2]
     } else {
         indices
-    }
-}
-
-pub(super) fn run_native_inference_with_timeout(
-    file_paths: &[String],
-    folder_paths: &[String],
-    timeout: Duration,
-) -> Result<crate::inference::entities::ProcessingRunResult, String> {
-    let (tx, rx) = mpsc::channel();
-    let files = file_paths.to_vec();
-    let folders = folder_paths.to_vec();
-
-    thread::spawn(move || {
-        let result = run_native_inference(&files, &folders);
-        let _ = tx.send(result);
-    });
-
-    match rx.recv_timeout(timeout) {
-        Ok(result) => result,
-        Err(mpsc::RecvTimeoutError::Timeout) => Err(format!(
-            "native rust inference timed out after {}s",
-            timeout.as_secs()
-        )),
-        Err(mpsc::RecvTimeoutError::Disconnected) => {
-            Err("native rust inference worker disconnected before returning a result".to_string())
-        }
     }
 }
 

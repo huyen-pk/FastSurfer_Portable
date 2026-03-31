@@ -1,0 +1,1 @@
+export const INFERENCE_PROGRESS_EVENT = "fastsurfer://inference-progress" as const;

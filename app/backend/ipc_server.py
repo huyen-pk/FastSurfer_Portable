@@ -65,7 +65,7 @@ class FastSurferIPCServer:
 		file_name = str(params.get("file_name") or "input.nii.gz")
 		return self.inference_service.predict_from_bytes(file_b64, file_name=file_name)
 
-	def _start_predict_batch(self, params: dict[str, Any]) -> dict[str, Any]:
+	def _resolve_requested_paths(self, params: dict[str, Any]) -> dict[str, Any]:
 		file_paths = params.get("file_paths") or []
 		folder_paths = params.get("folder_paths") or []
 		if not isinstance(file_paths, list) or not isinstance(folder_paths, list):
@@ -114,8 +114,8 @@ class FastSurferIPCServer:
 			result = self._predict_from_bytes(params)
 			return {"id": request_id, "ok": True, "result": result}
 
-		if method == "start_predict_batch":
-			result = self._start_predict_batch(params)
+		if method == "resolve_requested_paths":
+			result = self._resolve_requested_paths(params)
 			return {"id": request_id, "ok": True, "result": result}
 
 		if method == "predict_batch":

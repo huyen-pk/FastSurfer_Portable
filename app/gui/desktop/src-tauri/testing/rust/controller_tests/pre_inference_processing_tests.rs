@@ -1,7 +1,7 @@
 // This test suite integrates with test-containers for environment isolation.
 use super::support::{
-    create_backend_state_with_fake_responses, find_repo_root,
-    fixture_native_input, next_test_id, resolve_python_with_component_runtime,
+    find_repo_root, fixture_native_input, next_test_id,
+    resolve_python_with_component_runtime, spawn_bundled_backend_state,
 };
 use crate::inference::pipeline::preprocess::{
     InferencePlane, PreparedPlaneInput, load_input_volume,
@@ -133,32 +133,51 @@ if not np.allclose(rust_image, py_image, rtol=0.0, atol=1e-6):
 }
 
 #[test]
-fn start_predict_batch_with_valid_response_should_return_ack_and_paths() {
-    let backend = create_backend_state_with_fake_responses(&[
-        r#"{"ok":true,"result":{"ack_message":"queued","requested_paths":["a.nii.gz","b.nii.gz"]}}"#,
-    ]);
+fn resolve_requested_paths_with_real_backend_should_return_ack_and_paths() {
+    let repo_root = find_repo_root().expect("failed to locate repo root");
+    let input_nii = fixture_native_input(&repo_root);
+    let backend = spawn_bundled_backend_state()
+        .expect("expected bundled backend to start");
 
     let (ack, requested) = backend
-        .start_predict_batch(&["a.nii.gz".to_string()], &["/data".to_string()])
-        .expect("expected start_predict_batch to succeed");
+        .resolve_requested_paths(
+            &[input_nii.to_string_lossy().to_string()],
+            &[],
+        )
+        .expect("expected resolve_requested_paths to succeed");
 
-    assert_eq!(ack, "queued");
+    assert_eq!(ack, "Processing started for 1 path(s).");
+    assert_eq!(requested, vec![input_nii.to_string_lossy().to_string()]);
+}
+
+#[test]
+fn resolve_requested_paths_with_invalid_input_should_return_backend_error() {
+    let backend = spawn_bundled_backend_state()
+        .expect("expected bundled backend to start");
+
+    let result = backend.resolve_requested_paths(&[], &[]);
+
+    assert!(result.is_err());
     assert_eq!(
-        requested,
-        vec!["a.nii.gz".to_string(), "b.nii.gz".to_string()]
+        result.unwrap_err(),
+        "Backend resolve_requested_paths failed: No valid input image files selected (.nii, .nii.gz, .mgz, .mgh)."
     );
 }
 
 #[test]
-fn start_predict_batch_without_ack_message_should_return_missing_ack_error() {
-    let backend = create_backend_state_with_fake_responses(&[
-        r#"{"ok":true,"result":{"requested_paths":["a.nii.gz"]}}"#,
-    ]);
+fn predict_single_path_with_invalid_input_should_return_backend_error() {
+    let backend = spawn_bundled_backend_state()
+        .expect("expected bundled backend to start");
 
-    let result = backend.start_predict_batch(&[], &[]);
+    let result = backend.predict_single_path("", None, None);
 
-    assert!(result.is_err());
-    assert_eq!(result.unwrap_err(), "Missing ack_message in IPC response");
+    let Err(error) = result else {
+        panic!("expected predict_single_path to fail for invalid input");
+    };
+    assert_eq!(
+        error,
+        "Backend resolve_requested_paths failed: No valid input image files selected (.nii, .nii.gz, .mgz, .mgh)."
+    );
 }
 
 #[test]

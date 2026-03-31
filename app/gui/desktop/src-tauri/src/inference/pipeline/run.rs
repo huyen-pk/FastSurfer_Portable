@@ -3,7 +3,7 @@ use crate::inference::entities::{
     InputVolume, ProcessingRunResult,
 };
 use crate::inference::pipeline::{postprocess, preprocess, progress, qc};
-use crate::inference::{io, runtime};
+use crate::inference::{file_io, runtime};
 use std::collections::{BTreeSet, HashMap};
 // Path types are provided by the io/runtime modules where needed.
 use std::sync::{Arc, Mutex};
@@ -95,7 +95,7 @@ fn finalize_native_result(
     on_progress(92, "Converting logits to label volume...".to_string());
 
     let mut pred_labels_xyz =
-        io::map_label_indices_to_lut(label_indices_xyz, lut_ids)?;
+        file_io::map_label_indices_to_lut(label_indices_xyz, lut_ids)?;
     postprocess::split_cortex_labels(&mut pred_labels_xyz, volume.shape_xyz);
 
     let mut ranked = class_hist
@@ -116,7 +116,7 @@ fn finalize_native_result(
     on_progress(95, "Writing native prediction outputs...".to_string());
 
     let (output_dir, pred_path, aseg_path, brainmask_path) =
-        io::write_prediction_artifacts(volume, &pred_labels_xyz)?;
+        file_io::write_prediction_artifacts(volume, &pred_labels_xyz)?;
 
     let [sx, sy, sz] = volume.shape_xyz;
     let voxvol_mm3 = f64::from(volume.zoom_xyz[0])
@@ -1070,52 +1070,6 @@ fn run_forward_and_merge(
         sampled_voxels,
         plane_first_summaries,
     ))
-}
-
-pub(crate) fn run_native_inference(
-    file_paths: &[String],
-    folder_paths: &[String],
-) -> Result<ProcessingRunResult, String> {
-    let requested_paths = io::validate_inputs(file_paths, folder_paths)?;
-    let sessions = runtime::NativeOnnxSessions::load_default()?;
-    let lut_ids = io::load_lut_ids()?;
-
-    let mut results = Vec::with_capacity(requested_paths.len());
-    let mut result_directories = BTreeSet::new();
-    let mut qc_summaries = Vec::new();
-
-    for input_path in &requested_paths {
-        let single = run_native_single_path(
-            &sessions,
-            &lut_ids,
-            input_path,
-            &|| false,
-            |_progress, _message| {},
-        )?;
-        result_directories.insert(single.result_directory);
-        qc_summaries.push(single.qc_summary);
-        results.push(single.prediction);
-    }
-
-    let result_directories =
-        result_directories.into_iter().collect::<Vec<String>>();
-    let ack_message = if result_directories.is_empty() {
-        format!("Processing started for {} path(s).", requested_paths.len())
-    } else {
-        format!(
-            "Processing started for {} path(s). Results directory: {}",
-            requested_paths.len(),
-            result_directories.join(", ")
-        )
-    };
-
-    Ok(ProcessingRunResult {
-        ack_message,
-        requested_paths,
-        result_directories,
-        qc_summary: Some(qc_summaries.join(" | ")),
-        results,
-    })
 }
 
 pub(crate) fn run_native_inference_with_progress<R: tauri::Runtime>(

@@ -268,11 +268,11 @@ pub(crate) fn load_runtime_dependencies(
     folder_paths: &[String],
 ) -> Result<(Vec<String>, NativeOnnxSessions, Vec<u16>), String> {
     let requested_paths =
-        crate::inference::io::validate_inputs(file_paths, folder_paths)?;
+        crate::inference::file_io::validate_inputs(file_paths, folder_paths)?;
 
     let sessions = NativeOnnxSessions::load_default()?;
 
-    let lut_ids = crate::inference::io::load_lut_ids()?;
+    let lut_ids = crate::inference::file_io::load_lut_ids()?;
 
     Ok((requested_paths, sessions, lut_ids))
 }

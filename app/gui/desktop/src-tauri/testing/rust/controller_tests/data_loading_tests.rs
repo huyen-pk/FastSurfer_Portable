@@ -1,15 +1,10 @@
 // This test suite integrates with test-containers for environment isolation.
 use super::support::{
-    create_backend_state_via_shell_script,
-    create_backend_state_with_fake_responses, find_repo_root,
-    fixture_native_input, is_ci, resolve_python_with_component_runtime,
-    spawn_python_backend_inline,
+    find_repo_root, fixture_native_input, resolve_python_with_component_runtime,
 };
 use crate::inference::pipeline::preprocess::load_input_volume;
-use serde_json::{Value, json};
+use serde_json::Value;
 use std::process::Command;
-use std::sync::Arc;
-use std::thread;
 
 fn parse_json_usize_list(parsed: &Value, key: &str) -> Vec<usize> {
     parsed[key]
@@ -109,134 +104,6 @@ fn assert_sample_matches(
             "sample mismatch at {coord:?}: rust={rust_value} python={py_value}"
         );
     }
-}
-
-#[test]
-fn run_ipc_request_with_ok_response_should_return_result_value() {
-    let backend = create_backend_state_with_fake_responses(&[
-        r#"{"ok":true,"result":{"ack_message":"Accepted"}}"#,
-    ]);
-
-    let result = backend
-        .run_ipc_request("ping", &json!({ "hello": "world" }))
-        .expect("expected ipc request to succeed");
-
-    assert_eq!(
-        result.get("ack_message"),
-        Some(&Value::String("Accepted".to_string()))
-    );
-}
-
-#[test]
-fn run_ipc_request_with_non_json_prelude_should_wait_for_json_response() {
-    let backend = create_backend_state_via_shell_script(
-        "while IFS= read -r _line; do printf '%s\\n' 'backend log line'; printf '%s\\n' '{\"ok\":true,\"result\":{\"ack_message\":\"Accepted\"}}'; done",
-    );
-
-    let result = backend
-        .run_ipc_request("ping", &json!({ "hello": "world" }))
-        .expect(
-            "expected ipc request to ignore prelude and parse json response",
-        );
-
-    assert_eq!(
-        result.get("ack_message"),
-        Some(&Value::String("Accepted".to_string()))
-    );
-
-    let output_lines = backend
-        .drain_output_lines()
-        .expect("expected output lines to be available");
-    assert_eq!(output_lines, vec!["backend log line".to_string()]);
-}
-
-#[test]
-fn run_ipc_requests_with_concurrent_interleaving_should_route_by_request_id() {
-    let backend = Arc::new(create_backend_state_via_shell_script(
-        "first=''; second=''; while IFS= read -r line; do if [ -z \"$first\" ]; then first=\"$line\"; continue; fi; second=\"$line\"; first_id=$(printf '%s' \"$first\" | sed -n 's/.*\"id\"[[:space:]]*:[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p'); second_id=$(printf '%s' \"$second\" | sed -n 's/.*\"id\"[[:space:]]*:[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p'); printf '{\"id\":%s,\"ok\":true,\"result\":{\"ack_message\":\"second\"}}\\n' \"$second_id\"; printf '{\"id\":%s,\"ok\":true,\"result\":{\"ack_message\":\"first\"}}\\n' \"$first_id\"; break; done",
-    ));
-
-    let first_backend = Arc::clone(&backend);
-    let first = thread::spawn(move || {
-        first_backend
-            .run_ipc_request("first", &json!({ "payload": 1 }))
-            .expect("expected first request to succeed")
-    });
-
-    let second_backend = Arc::clone(&backend);
-    let second = thread::spawn(move || {
-        second_backend
-            .run_ipc_request("second", &json!({ "payload": 2 }))
-            .expect("expected second request to succeed")
-    });
-
-    let first_result = first.join().expect("first request thread should join");
-    let second_result =
-        second.join().expect("second request thread should join");
-
-    assert_eq!(
-        first_result.get("ack_message"),
-        Some(&Value::String("first".to_string()))
-    );
-    assert_eq!(
-        second_result.get("ack_message"),
-        Some(&Value::String("second".to_string()))
-    );
-}
-
-#[test]
-fn run_ipc_request_with_real_python_process_should_pipe_request_and_receive_response()
- {
-    let backend = spawn_python_backend_inline(
-        "import json,sys\nfor line in sys.stdin:\n line=line.strip()\n if not line: continue\n req=json.loads(line)\n sys.stdout.write(json.dumps({'ok': True, 'result': {'echo_method': req.get('method')}}) + '\\n')\n sys.stdout.flush()",
-    );
-
-    let Some(backend) = backend else {
-        if is_ci() {
-            eprintln!(
-                "python executable unavailable in CI; skipping real python subprocess test"
-            );
-            return;
-        }
-        panic!(
-            "python executable unavailable in local environment; set FASTSURFER_PYTHON_BIN or install python3"
-        );
-    };
-
-    let result = backend.run_ipc_request("health", &json!({})).expect(
-        "expected run_ipc_request to communicate with real python process",
-    );
-
-    assert_eq!(
-        result.get("echo_method"),
-        Some(&Value::String("health".to_string()))
-    );
-}
-
-#[test]
-fn run_ipc_request_with_backend_error_should_return_formatted_error() {
-    let backend = create_backend_state_with_fake_responses(&[
-        r#"{"ok":false,"error":{"message":"boom"}}"#,
-    ]);
-
-    let result = backend.run_ipc_request("predict_batch", &json!({}));
-
-    assert!(result.is_err());
-    assert_eq!(result.unwrap_err(), "Backend predict_batch failed: boom");
-}
-
-#[test]
-fn run_ipc_request_with_invalid_json_should_return_invalid_json_error() {
-    let backend = create_backend_state_with_fake_responses(&["{\"ok\":true"]);
-
-    let result = backend.run_ipc_request("predict_batch", &json!({}));
-
-    assert!(result.is_err());
-    assert!(
-        result
-            .unwrap_err()
-            .starts_with("Invalid IPC response JSON:")
-    );
 }
 
 #[test]

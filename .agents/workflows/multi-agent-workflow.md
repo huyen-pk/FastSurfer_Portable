@@ -28,6 +28,7 @@ This workflow orchestrates the interaction between the Architect, Coder, Reviewe
 ## Step 5: Code Implementation (Coder)
 - The Coder implements the changes according to the approved plan.
 - The Coder ensures all BDD tests from the Product Owner pass and follows the naming/placement conventions in `app/SKILLS.md`.
+- Update documentation to reflect the changes.
 - **Output:** Functional code changes using **real implementations only**.
 
 ## Step 6: Verification (Tester)

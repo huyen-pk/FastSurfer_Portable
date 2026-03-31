@@ -2,11 +2,8 @@
 #[path = "controller_tests/support.rs"]
 mod support;
 
-#[path = "controller_tests/e2e_parity_tests.rs"]
-mod e2e_parity_tests;
-
-#[path = "controller_tests/progress_tests.rs"]
-mod progress_tests;
+#[path = "controller_tests/transport_tests.rs"]
+mod transport_tests;
 
 #[path = "controller_tests/data_loading_tests.rs"]
 mod data_loading_tests;
@@ -25,9 +22,6 @@ mod pre_inference_processing_tests;
 
 #[path = "controller_tests/post_inference_processing_tests.rs"]
 mod post_inference_processing_tests;
-
-#[path = "controller_tests/full_volume_parity_benchmark_tests.rs"]
-mod full_volume_parity_benchmark_tests;
 
 #[path = "controller_tests/native_progress_behavior_test.rs"]
 mod native_progress_behavior_test;

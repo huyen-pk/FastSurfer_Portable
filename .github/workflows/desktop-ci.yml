@@ -1,0 +1,75 @@
+name: Desktop Build (cross-platform)
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  build-desktop:
+    name: Build desktop installers on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    env:
+      # Cache/download location for ONNX Runtime when build.rs auto-downloads it
+      FASTSURFER_ORT_DOWNLOAD_DIR: ${{ github.workspace }}/app/gui/desktop/src-tauri/.ort-runtime-cache
+      # Ensure stable Rust
+      RUSTUP_TOOLCHAIN: stable
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache Cargo registry and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Setup Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install Python build deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install frontend dependencies
+        working-directory: app/gui/simple-viewer
+        run: npm ci
+
+      - name: Install desktop deps
+        working-directory: app/gui/desktop
+        run: npm ci
+
+      - name: Run app build
+        working-directory: app
+        run: ./build_app.sh --target desktop
+        shell: bash
+
+      - name: Upload desktop bundles
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fastsurfer-desktop-${{ matrix.os }}
+          path: app/gui/desktop/src-tauri/target/release/bundle/**

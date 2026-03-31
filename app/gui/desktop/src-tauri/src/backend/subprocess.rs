@@ -61,7 +61,6 @@ pub fn spawn_backend_process(
         launch_cmd.current_dir(sidecar_dir);
     } else if let Some(root) = repo_root {
         launch_cmd.current_dir(root);
-        launch_cmd.env("PYTHONPATH", with_repo_on_pythonpath(root));
     }
 
     let mut child = launch_cmd.spawn().map_err(|e| {
@@ -84,34 +83,13 @@ pub fn spawn_backend_process(
     })
 }
 
-/// Attempts to infer the repository root by walking up from the python script path.
-/// Looks for the `FastSurferCNN` directory as a marker.
-pub fn resolve_repo_root_from_python_script(
-    script_path: &Path,
-) -> Option<PathBuf> {
-    script_path
-        .ancestors()
-        .find(|ancestor| ancestor.join("FastSurferCNN").exists())
-        .map(Path::to_path_buf)
-}
+// Repository-root inference via Python script is no longer required when
+// launching the bundled backend binary. Development-time helpers were
+// removed to simplify launch logic.
 
-/// Helper to prepend the repo root to the existing PYTHONPATH.
-fn with_repo_on_pythonpath(repo_root: &Path) -> String {
-    let repo_root_str = repo_root.to_string_lossy().to_string();
-    if let Ok(existing) = std::env::var("PYTHONPATH") {
-        if existing
-            .split(':')
-            .any(|entry| entry.trim() == repo_root_str)
-        {
-            return existing;
-        }
-        if existing.trim().is_empty() {
-            return repo_root_str;
-        }
-        return format!("{repo_root_str}:{existing}");
-    }
-    repo_root_str
-}
+// `PYTHONPATH` manipulation removed: production runtime only launches the
+// bundled backend binary. Development-time Python IPC setup was intentionally
+// removed to avoid touching Python dev layout from production code paths.
 
 /// Loosely loads environment variables from a `.env` file if present near the executable.
 /// This mimics `python-dotenv` behavior for desktop dev environments.
@@ -167,89 +145,63 @@ pub fn resolve_backend_binary_path_from(
     cwd: &Path,
     exe_dir: &Path,
 ) -> Result<PathBuf, String> {
-    let cwd_suffixes = [
+    if let Ok(override_path) = std::env::var("FASTSURFER_BACKEND_BIN") {
+        let p = PathBuf::from(override_path);
+        if p.exists() {
+            return std::fs::canonicalize(p).map_err(|e| {
+                format!("failed to canonicalize override path: {e}")
+            });
+        }
+    }
+
+    let common_suffixes = [
+        "backend/main",
         "app/gui/desktop/backend/main",
         "gui/desktop/backend/main",
-        "backend/main",
+        "resources/backend/main",
         "../backend/main",
-        "../../backend/main",
-        "../../../backend/main",
     ];
 
-    let exe_suffixes = [
-        "../backend/main",
-        "../../backend/main",
-        "../../../backend/main",
-        "../../../../backend/main",
-        "../../../../../backend/main",
-        "../../../../../../backend/main",
+    #[cfg(windows)]
+    let common_suffixes_win = [
+        "backend/main.exe",
+        "app/gui/desktop/backend/main.exe",
+        "gui/desktop/backend/main.exe",
+        "resources/backend/main.exe",
+        "../backend/main.exe",
     ];
 
-    first_existing_path(cwd, &cwd_suffixes)
-        .or_else(|| first_existing_path(exe_dir, &exe_suffixes))
-        .ok_or_else(|| {
-            "Could not find bundled backend binary app/gui/desktop/backend/main"
-                .to_string()
-        })
-}
-
-/// Locates the python backend script `ipc_server.py` for development mode.
-#[must_use]
-pub fn resolve_python_backend_script_path_from(
-    cwd: &Path,
-    exe_dir: &Path,
-) -> Option<PathBuf> {
-    let cwd_suffixes = [
-        "app/backend/ipc_server.py",
-        "../app/backend/ipc_server.py",
-        "../../app/backend/ipc_server.py",
-        "../../../app/backend/ipc_server.py",
-        "backend/ipc_server.py",
-        "../backend/ipc_server.py",
-        "../../backend/ipc_server.py",
-        "../../../backend/ipc_server.py",
-    ];
-
-    let exe_suffixes = [
-        "../app/backend/ipc_server.py",
-        "../../app/backend/ipc_server.py",
-        "../../../app/backend/ipc_server.py",
-        "../../../../app/backend/ipc_server.py",
-    ];
-
-    first_existing_path(cwd, &cwd_suffixes)
-        .or_else(|| first_existing_path(exe_dir, &exe_suffixes))
-}
-
-/// Finds a valid python executable, checking environment overrides first.
-#[must_use]
-pub fn resolve_python_executable() -> Option<String> {
-    let mut candidates: Vec<String> = Vec::new();
-
-    if let Ok(py_bin) = std::env::var("FASTSURFER_PYTHON_BIN")
-        && !py_bin.trim().is_empty()
+    // Build candidate base directories in order: exe parent (packaged), exe_dir, cwd (repo).
+    let mut bases: Vec<PathBuf> = Vec::new();
+    if let Ok(current_exe) = std::env::current_exe()
+        && let Some(parent) = current_exe.parent()
     {
-        candidates.push(py_bin);
+        bases.push(parent.to_path_buf());
+    }
+    bases.push(exe_dir.to_path_buf());
+    bases.push(cwd.to_path_buf());
+
+    for base in &bases {
+        if let Some(found) =
+            first_existing_path(base.as_path(), &common_suffixes)
+        {
+            return std::fs::canonicalize(found).map_err(|e| {
+                format!("failed to canonicalize backend path: {e}")
+            });
+        }
+        #[cfg(windows)]
+        {
+            if let Some(found) =
+                first_existing_path(base.as_path(), &common_suffixes_win)
+            {
+                return std::fs::canonicalize(found).map_err(|e| {
+                    format!("failed to canonicalize backend path: {e}")
+                });
+            }
+        }
     }
 
-    if let Ok(py_bin) = std::env::var("PYTHON_BIN")
-        && !py_bin.trim().is_empty()
-    {
-        candidates.push(py_bin);
-    }
-
-    candidates.push("python3".to_string());
-    candidates.push("python".to_string());
-
-    candidates.into_iter().find(|candidate| {
-        Command::new(candidate)
-            .arg("--version")
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .is_ok()
-    })
+    Err("Could not find bundled backend binary. Use FASTSURFER_BACKEND_BIN to override.".to_string())
 }
 
 /// Determines the best command to launch the backend: either the bundled binary or python script.
@@ -261,24 +213,11 @@ pub fn resolve_backend_launch_command_from(
     cwd: &Path,
     exe_dir: &Path,
 ) -> Result<BackendLaunchCommand, String> {
-    if let Ok(binary_path) = resolve_backend_binary_path_from(cwd, exe_dir) {
-        return Ok(BackendLaunchCommand {
-            program: binary_path.to_string_lossy().to_string(),
-            args: Vec::new(),
-        });
-    }
+    // Only allow launching the bundled backend binary.
+    let binary_path = resolve_backend_binary_path_from(cwd, exe_dir)?;
 
-    let python_script = resolve_python_backend_script_path_from(cwd, exe_dir);
-    let python_exec = resolve_python_executable();
-
-    if let (Some(script), Some(py)) = (python_script, python_exec) {
-        return Ok(BackendLaunchCommand {
-            program: py,
-            args: vec![script.to_string_lossy().to_string()],
-        });
-    }
-
-    Err(
-        "Could not resolve backend launch command: bundled backend binary not found and no Python interpreter available. Install Python or set FASTSURFER_PYTHON_BIN, or provide bundled backend binary app/gui/desktop/backend/main.".to_string(),
-    )
+    Ok(BackendLaunchCommand {
+        program: binary_path.to_string_lossy().to_string(),
+        args: Vec::new(),
+    })
 }

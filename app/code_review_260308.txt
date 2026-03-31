@@ -41,4 +41,4 @@ need to see whether the conversion is needed (use mgh crate) then handle the con
 
 
 - prediction.rs
-=> run_fastsurfer_inference() should run async
+=> legacy `run_fastsurfer_inference` removed; use `run_fastsurfer_inference_with_progress` (async)

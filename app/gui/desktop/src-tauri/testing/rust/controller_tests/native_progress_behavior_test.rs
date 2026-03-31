@@ -1,6 +1,6 @@
 // This test suite integrates with test-containers for environment isolation.
 use super::support::{find_repo_root, setup_test_app};
-use crate::events::InferenceProgressEvent;
+use crate::events::{INFERENCE_PROGRESS_EVENT, InferenceProgressEvent};
 use crate::inference::pipeline::run::run_native_inference_with_progress;
 use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex};
@@ -39,7 +39,7 @@ async fn test_native_inference_reports_progress_in_real_time() {
         tokio::sync::mpsc::channel::<InferenceProgressEvent>(100);
 
     let task_id_clone = task_id.clone();
-    app_handle.listen_any("fastsurfer://inference-progress", move |event| {
+    app_handle.listen_any(INFERENCE_PROGRESS_EVENT, move |event| {
         if let Ok(progress_event) =
             serde_json::from_str::<InferenceProgressEvent>(event.payload())
             && progress_event.task_id == task_id_clone

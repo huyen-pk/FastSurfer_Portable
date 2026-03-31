@@ -1,16 +1,20 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { InferenceProgressEvent } from "../types/inference";
+import { INFERENCE_PROGRESS_EVENT } from "./events";
 import type { ProcessInferenceRequest, ProcessInferenceResponse, Transport } from "./types";
 
 export function createIpcTransport(): Transport {
   return {
     async processInference({ filePaths, folderPaths }: ProcessInferenceRequest): Promise<ProcessInferenceResponse> {
-      console.debug("[trace][frontend-ipc] invoke run_fastsurfer_inference", {
+      console.debug("[trace][frontend-ipc] invoke run_fastsurfer_inference_with_progress (legacy)", {
         filePaths: filePaths.length,
         folderPaths: folderPaths.length
       });
-      return invoke<ProcessInferenceResponse>("run_fastsurfer_inference", {
+      // Legacy callers expect a simple invoke; reuse the progress path with a temporary taskId
+      const taskId = `legacy-${Date.now()}`;
+      return invoke<ProcessInferenceResponse>("run_fastsurfer_inference_with_progress", {
+        taskId,
         filePaths,
         folderPaths
       });
@@ -25,7 +29,7 @@ export function createIpcTransport(): Transport {
         filePaths: filePaths.length,
         folderPaths: folderPaths.length
       });
-      const unlisten = await listen<InferenceProgressEvent>("fastsurfer://inference-progress", (event) => {
+      const unlisten = await listen<InferenceProgressEvent>(INFERENCE_PROGRESS_EVENT, (event) => {
         if (event.payload?.taskId === taskId && observer) {
           console.debug("[trace][frontend-ipc] progress event", event.payload);
           observer(event.payload);

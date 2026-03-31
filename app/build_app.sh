@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Avoid VS Code debug preload breaking Node when `NODE_OPTIONS` contains
+# a `--require` pointing to a missing bootloader inside remote containers.
+# Unset it early so downstream `node` invocations run cleanly.
+if [[ -n "${NODE_OPTIONS:-}" ]]; then
+  unset NODE_OPTIONS
+fi
+
 APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$APP_DIR/.." && pwd)"
 
