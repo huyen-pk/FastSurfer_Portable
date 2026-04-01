@@ -15,7 +15,7 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
     env:
       # Cache/download location for ONNX Runtime when build.rs auto-downloads it
-      FASTSURFER_ORT_DOWNLOAD_DIR: ${{ github.workspace }}/app/gui/desktop/src-tauri/.ort-runtime-cache
+      FASTSURFER_ORT_DOWNLOAD_DIR: ${{ github.workspace }}/app/gui/workbench/src-tauri/.ort-runtime-cache
       # Ensure stable Rust
       RUSTUP_TOOLCHAIN: stable
 
@@ -55,11 +55,11 @@ jobs:
           cache: 'npm'
 
       - name: Install frontend dependencies
-        working-directory: app/gui/simple-viewer
+        working-directory: app/gui/damadian-ui
         run: npm ci
 
       - name: Install desktop deps
-        working-directory: app/gui/desktop
+        working-directory: app/gui/workbench
         run: npm ci
 
       - name: Run app build
@@ -72,4 +72,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: fastsurfer-desktop-${{ matrix.os }}
-          path: app/gui/desktop/src-tauri/target/release/bundle/**
+          path: app/gui/workbench/src-tauri/target/release/bundle/**

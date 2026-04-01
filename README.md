@@ -70,8 +70,8 @@ CI checks
 ---------
 The repository runs several verification jobs in CI to keep code quality consistent. These are executed on pushes and pull requests and mirror the repository's pre-commit policy.
 
-- **Rust:** runs `cargo fmt -- --check` and `cargo clippy -- -D warnings` in `app/gui/desktop/src-tauri`.
-- **TypeScript / Svelte:** runs `npm ci` and `npx tsc --noEmit` in `app/gui/simple-viewer`.
+- **Rust:** runs `cargo fmt -- --check` and `cargo clippy -- -D warnings` in `app/gui/workbench/src-tauri`.
+- **TypeScript / Svelte:** runs `npm ci` and `npx tsc --noEmit` in `app/gui/damadian-ui`.
 - **Anti-mock scan:** fails CI if changed source files contain forbidden mock patterns (e.g. `import .*mock`, `mock(`, `Mocking`).
 - **Test containers check:** any new/changed test file (`*.test.*`, names containing `test`) should reference `testcontainers`, `docker`, or `container`.
 
@@ -79,12 +79,12 @@ Run these checks locally before pushing:
 
 ```bash
 # Rust (from repo root)
-cd app/gui/desktop/src-tauri
+cd app/gui/workbench/src-tauri
 cargo fmt -- --check
 cargo clippy -- -D warnings
 
 # TypeScript (from repo root)
-cd app/gui/simple-viewer
+cd app/gui/damadian-ui
 npm ci
 npx tsc --noEmit
 

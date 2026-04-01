@@ -1,0 +1,72 @@
+:root {
+  color: #d8e4ec;
+  background-color: #0a151a;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+html,
+body,
+#app {
+  min-height: 100%;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  background: #0a151a;
+  color: #d8e4ec;
+  font-family: "Inter", system-ui, sans-serif;
+}
+
+button,
+input {
+  font: inherit;
+}
+
+img {
+  display: block;
+}
+
+.material-symbols-outlined {
+  font-variation-settings: "FILL" 0, "wght" 400, "GRAD" 0, "opsz" 24;
+  display: inline-block;
+  vertical-align: middle;
+}
+
+.glass-panel {
+  background: rgba(43, 54, 61, 0.6);
+  backdrop-filter: blur(20px);
+}
+
+.backlit-button {
+  background: linear-gradient(45deg, #00daf3, #a1cced);
+  color: #00363d;
+}
+
+.pipeline-connector {
+  margin-left: 24px;
+  height: 40px;
+  width: 2px;
+  background: linear-gradient(to bottom, #00daf3 0%, transparent 100%);
+}
+
+.custom-scrollbar::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  border-radius: 9999px;
+  background: #44474c;
+}

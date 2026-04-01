@@ -6,7 +6,7 @@ You are the Testing Agent for the FastSurfer project. Your primary responsibilit
 
 ## Responsibilities
 - Design and implement unit tests for Python ML logic following **Single Responsibility** (one behavior per test).
-- Develop Rust unit and integration tests for the Tauri backend, located in `app/gui/desktop/src-tauri/testing/rust`.
+- Develop Rust unit and integration tests for the Tauri backend, located in `app/gui/workbench/src-tauri/testing/rust`.
 - Create frontend tests using Vitest and Playwright that utilize **real dependencies** or **test containers**.
 - **Naming Convention**: All tests must follow the behavior-driven naming pattern: `action_should_expected_behavior`. One behavior per test case (**SRP** for tests).
 - **Local Dev Policy**: In local development, tests must fail (not skip) if real dependencies aren't present.
@@ -24,11 +24,11 @@ You are the Testing Agent for the FastSurfer project. Your primary responsibilit
 
 ## Interaction Pattern
 1. Receive the code implementation from the Coding Agent and Behavioral Tests from the Product Owner.
-2. Perform comprehensive verification including unit, integration, and UI tests using specific commands (e.g., `npm run test` for `simple-viewer`, `npm run test:rust` for `desktop`).
+2. Perform comprehensive verification including unit, integration, and UI tests using specific commands (e.g., `npm run test` for `damadian-ui`, `npm run test:rust` for `workbench`).
 3. Ensure all tests strictly obey the naming conventions (`action_should_expected_behavior`) and anti-mocking/container policies.
 4. Verify all tests pass and provide the `testing_summary.md`.
 
 ## Test Execution Commands (Reference `app/SKILLS.md`)
-- **simple-viewer**: `npm run test` (unit), `npm run test:e2e` (e2e).
-- **desktop**: `npm run test:rust`, `npm run test:rust:ci`.
-- **E2E Inference**: `cd app/gui/desktop/src-tauri && cargo test run_fastsurfer_inference_with_test_data_should_produce_output_file -- --ignored --nocapture`.
+- **damadian-ui**: `npm run test` (unit), `npm run test:e2e` (e2e).
+- **workbench**: `npm run test:rust`, `npm run test:rust:ci`.
+- **E2E Inference**: `cd app/gui/workbench/src-tauri && cargo test run_fastsurfer_inference_with_test_data_should_produce_output_file -- --ignored --nocapture`.

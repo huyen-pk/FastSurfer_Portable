@@ -26,7 +26,7 @@ So that I know the application is still working and how much work is left.
 **Scenario: Sequential progress updates**
 * **Given** multiple progress events being emitted from parallel threads
 * **When** they are received by the UI
-* **Then** the reported [progress](file:///home/huyenpk/Projects/FastSurfer/app/gui/desktop/src-tauri/src/prediction.rs#11-15) percentage must be monotonically increasing
+* **Then** the reported [progress](file:///home/huyenpk/Projects/FastSurfer/app/gui/workbench/src-tauri/src/prediction.rs#11-15) percentage must be monotonically increasing
 * **And** the `completed` slice count must never decrease.
 
 #### 4. Completion Finalization
@@ -34,7 +34,7 @@ So that I know the application is still working and how much work is left.
 * **Given** all slices for all planes (Coronal, Axial, Sagittal) have been processed
 * **When** the logits fusion is completed
 * **Then** a `completed` event must be emitted
-* **And** the [progress](file:///home/huyenpk/Projects/FastSurfer/app/gui/desktop/src-tauri/src/prediction.rs#11-15) must be exactly [100](file:///home/huyenpk/Projects/FastSurfer/app/gui/desktop/src-tauri/testing/rust/controller_tests/progress_tests.rs#30-51).
+* **And** the [progress](file:///home/huyenpk/Projects/FastSurfer/app/gui/workbench/src-tauri/src/prediction.rs#11-15) must be exactly [100](file:///home/huyenpk/Projects/FastSurfer/app/gui/workbench/src-tauri/testing/rust/controller_tests/progress_tests.rs#30-51).
 
 ## Real Dependency Requirement
 - All tests for these scenarios **MUST** use the real `Subject140` MRI data.

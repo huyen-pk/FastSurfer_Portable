@@ -22,8 +22,8 @@ This document records the implementation choices for the new in-process, typed m
 - `MediatorSubscription::new(mediator(), id)` — RAII wrapper that calls `unsubscribe` in `Drop`.
 
 **Delivered Files / Locations**
-- `app/gui/desktop/src-tauri/src/mediator.rs` — mediator implementation, unit tests, and documentation comments.
-- `app/gui/desktop/src-tauri/src/backend/mod.rs` — updated call sites to publish `Arc` events and to use `mediator()` subscribe/unsubscribe directly.
+-- `app/gui/workbench/src-tauri/src/mediator.rs` — mediator implementation, unit tests, and documentation comments.
+-- `app/gui/workbench/src-tauri/src/backend/mod.rs` — updated call sites to publish `Arc` events and to use `mediator()` subscribe/unsubscribe directly.
 - Tests: mediator unit tests in `mediator.rs` and targeted controller integration tests that exercise the event flow.
 
 **Migration Notes / Caller Impact**
@@ -34,7 +34,7 @@ This document records the implementation choices for the new in-process, typed m
 **Validation**
 1. Run mediator unit tests: `cargo test -p app-gui-desktop-src-tauri -- mediator` (crate-focused invocation may vary).
 2. Run desktop controller integration tests that use the mediator event flow: `cargo test --test controller_tests -- --nocapture` (run from the crate directory).
-3. Confirm CI linting: `cargo fmt && cargo clippy --quiet --all-targets --message-format short -- -D warnings` within `app/gui/desktop/src-tauri`.
+3. Confirm CI linting: `cargo fmt && cargo clippy --quiet --all-targets --message-format short -- -D warnings` within `app/gui/workbench/src-tauri`.
 
 **Acceptance Criteria**
 - Typed events are only delivered to subscribers of that concrete type.

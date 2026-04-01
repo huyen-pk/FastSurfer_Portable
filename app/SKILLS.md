@@ -10,8 +10,8 @@ This guide covers:
 - Writing and running tests
 
 Primary targets in this repo:
-- `app/gui/simple-viewer` (Svelte + Vite + TypeScript)
-- `app/gui/desktop` (Tauri + Rust backend controllers)
+- `app/gui/damadian-ui` (Svelte + Vite + TypeScript)
+- `app/gui/workbench` (Tauri + Rust backend controllers)
 - `app/backend` (Python FastAPI + packaged backend runtime)
 
 ---
@@ -45,43 +45,43 @@ Primary targets in this repo:
 - Keep UI logic and transport/backend logic separated.
 - Avoid unrelated refactors in the same change.
 
-### `simple-viewer` Feature Work
+### `damadian-ui` Feature Work
 
-- UI components live under `app/gui/simple-viewer/src`.
-- Transport abstractions live under `app/gui/simple-viewer/src/transport`.
-- Shared inference types live under `app/gui/simple-viewer/src/types`.
+- UI components live under `app/gui/damadian-ui/src`.
+- Transport abstractions live under `app/gui/damadian-ui/src/transport`.
+- Shared inference types live under `app/gui/damadian-ui/src/types`.
 - Prefer adding behavior through typed helpers instead of duplicating logic in components.
 
-### `desktop` (Tauri) Feature Work
+### `workbench` (Tauri) Feature Work
 
-- Tauri/Rust command logic is in `app/gui/desktop/src-tauri/src/lib.rs`.
+- Tauri/Rust command logic is in `app/gui/workbench/src-tauri/src/lib.rs`.
 - Keep command handlers thin and move testable logic into helper functions.
 - If adding controller logic, ensure it is unit-testable without launching full Tauri runtime.
-- Rust tests should live in `app/gui/desktop/src-tauri/testing/rust`.
+- Rust tests should live in `app/gui/workbench/src-tauri/testing/rust`.
 
 ---
 
 ## Build & Run
 
-### `simple-viewer`
+### `damadian-ui`
 
-From `app/gui/simple-viewer`:
+From `app/gui/damadian-ui`:
 
 - Install deps: `npm install`
 - Dev server: `npm run dev`
 - Production build: `npm run build`
 - Preview build: `npm run preview`
 
-### `desktop`
+### `workbench`
 
-From `app/gui/desktop`:
+From `app/gui/workbench`:
 
 - Install deps: `npm install`
 - Run Tauri app: `npm run tauri dev`
 
 Notes:
 - Tauri backend build may depend on bundled backend binary paths.
-- If build fails around backend path resolution, check expected backend binary location under `app/gui/desktop/backend/main`.
+- If build fails around backend path resolution, check expected backend binary location under `app/gui/workbench/backend/main`.
 
 ### `backend` (Python)
 
@@ -92,12 +92,12 @@ From repository root:
 
 Build details:
 - Packaging uses PyInstaller via `app/backend/main.spec`.
-- Build output is placed under `app/gui/desktop/backend`.
-- Expected executable artifact: `app/gui/desktop/backend/main`.
+- Build output is placed under `app/gui/workbench/backend`.
+- Expected executable artifact: `app/gui/workbench/backend/main`.
 
 Validation:
-- Confirm artifact exists: `ls -l app/gui/desktop/backend/main`
-- Confirm executable bit: `test -x app/gui/desktop/backend/main`
+- Confirm artifact exists: `ls -l app/gui/workbench/backend/main`
+- Confirm executable bit: `test -x app/gui/workbench/backend/main`
 
 ### Build Scripts
 
@@ -131,13 +131,13 @@ One behavior per test case.
 - **Reasoning**: To ensure tests validate real system behavior and integration, avoiding the brittleness of mocked interfaces.
 - **Local Dev**: Tests should fail (not skip) if environment dependencies are missing.
 
-### `simple-viewer` Tests
+### `damadian-ui` Tests
 
 Location:
-- `app/gui/simple-viewer/testing/vitest` (unit/component)
-- `app/gui/simple-viewer/testing/e2e` (Playwright)
+- `app/gui/damadian-ui/testing/vitest` (unit/component)
+- `app/gui/damadian-ui/testing/e2e` (Playwright)
 
-Commands (from `app/gui/simple-viewer`):
+Commands (from `app/gui/damadian-ui`):
 - Unit/component: `npm run test`
 - Unit/component watch: `npm run test:watch`
 - E2E: `npm run test:e2e`
@@ -148,18 +148,18 @@ Outputs:
 - Playwright report: `testing/e2e/results/playwright-report`
 - Playwright artifacts: `testing/e2e/results/test-results`
 
-### `desktop` Rust Controller Tests
+### `workbench` Rust Controller Tests
 
 Location:
-- `app/gui/desktop/src-tauri/testing/rust/controller_tests.rs`
+- `app/gui/workbench/src-tauri/testing/rust/controller_tests.rs`
 
-Commands (from `app/gui/desktop`):
+Commands (from `app/gui/workbench`):
 - Local Rust tests: `npm run test:rust`
 - CI-style Rust tests (with logs): `npm run test:rust:ci`
-- Data-driven e2e inference test: `cd app/gui/desktop/src-tauri && cargo test run_fastsurfer_inference_with_test_data_should_produce_output_file -- --ignored --nocapture`
+- Data-driven e2e inference test: `cd app/gui/workbench/src-tauri && cargo test run_fastsurfer_inference_with_test_data_should_produce_output_file -- --ignored --nocapture`
 
-Python binary config for desktop IPC launch/e2e tests:
-- Configure `app/gui/desktop/.env` with `FASTSURFER_PYTHON_BIN`.
+Python binary config for workbench IPC launch/e2e tests:
+- Configure `app/gui/workbench/.env` with `FASTSURFER_PYTHON_BIN`.
 - Example: `FASTSURFER_PYTHON_BIN=/home/<user>/anaconda3/envs/fastsurfer/bin/python`
 - Fallback value: `FASTSURFER_PYTHON_BIN=python3`
 
@@ -200,18 +200,18 @@ Output:
 
 ## Quick Command Matrix
 
-### Simple Viewer
-- `cd app/gui/simple-viewer && npm run dev`
-- `cd app/gui/simple-viewer && npm run build`
-- `cd app/gui/simple-viewer && npm run test`
-- `cd app/gui/simple-viewer && npm run test:e2e`
+### Damadian UI
+- `cd app/gui/damadian-ui && npm run dev`
+- `cd app/gui/damadian-ui && npm run build`
+- `cd app/gui/damadian-ui && npm run test`
+- `cd app/gui/damadian-ui && npm run test:e2e`
 
-### Desktop
-- `cd app/gui/desktop && npm run tauri dev`
-- `cd app/gui/desktop && npm run test:rust`
-- `cd app/gui/desktop && npm run test:rust:ci`
+### Workbench
+- `cd app/gui/workbench && npm run tauri dev`
+- `cd app/gui/workbench && npm run test:rust`
+- `cd app/gui/workbench && npm run test:rust:ci`
 
 ### Backend
 - `pip install -r app/backend/requirements.txt`
 - `bash app/backend/build.sh`
-- `ls -l app/gui/desktop/backend/main`
+- `ls -l app/gui/workbench/backend/main`

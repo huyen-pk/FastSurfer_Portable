@@ -15,8 +15,8 @@ else
 	exit 127
 fi
 
-TARGET_BACKEND_DIR="$SCRIPT_DIR/../gui/desktop/backend"
-DIST_PARENT_DIR="$SCRIPT_DIR/../gui/desktop"
+TARGET_BACKEND_DIR="$SCRIPT_DIR/../gui/workbench/backend"
+DIST_PARENT_DIR="$SCRIPT_DIR/../gui/workbench"
 
 # Remove legacy output path from older build flow to avoid duplicated artifacts.
 rm -rf "$SCRIPT_DIR/dist"

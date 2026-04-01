@@ -70,8 +70,8 @@ fi
 export VITE_FASTSURFER_TARGET="$TARGET_ENVIRONMENT"
 
 BACKEND_BUILD_SCRIPT="$APP_DIR/backend/build.sh"
-FRONTEND_BUILD_SCRIPT="$APP_DIR/gui/simple-viewer/build.sh"
-TAURI_BUILD_SCRIPT="$APP_DIR/gui/desktop/build.sh"
+FRONTEND_BUILD_SCRIPT="$APP_DIR/gui/damadian-ui/build.sh"
+TAURI_BUILD_SCRIPT="$APP_DIR/gui/workbench/build.sh"
 CLEAN_SCRIPT="$APP_DIR/clean_build_artifacts.sh"
 
 if [[ "$CLEAN_FIRST" == true ]]; then

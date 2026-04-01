@@ -130,11 +130,11 @@ jobs:
           rustup component add rustfmt clippy || true
 
       - name: Cargo fmt --check
-        working-directory: app/gui/desktop/src-tauri
+        working-directory: app/gui/workbench/src-tauri
         run: cargo fmt -- --check || (echo "Run `cargo fmt` locally to fix formatting" && exit 1)
 
       - name: Cargo clippy (deny warnings)
-        working-directory: app/gui/desktop/src-tauri
+        working-directory: app/gui/workbench/src-tauri
         run: cargo clippy -- -D warnings
 
   # TypeScript / Svelte type-check
@@ -153,10 +153,10 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
-        working-directory: app/gui/simple-viewer
+        working-directory: app/gui/damadian-ui
 
       - name: Run tsc --noEmit
-        working-directory: app/gui/simple-viewer
+        working-directory: app/gui/damadian-ui
         run: npx tsc --noEmit
 
   # Anti-mock scans changed files for forbidden mock imports/usages

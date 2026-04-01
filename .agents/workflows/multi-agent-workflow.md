@@ -41,8 +41,8 @@ This workflow orchestrates the interaction between the Architect, Coder, Reviewe
 - The Reviewer examines the plans, BDD tests, code, and verification results.
 - The Reviewer **triggers and verifies Quality Gates**:
     - Runs `ruff check .` for Python.
-    - Runs `cargo clippy --manifest-path app/gui/desktop/src-tauri/Cargo.toml` for Rust.
-    - Runs `tsc --noEmit --project app/gui/simple-viewer/tsconfig.json` for TypeScript.
+    - Runs `cargo clippy --manifest-path app/gui/workbench/src-tauri/Cargo.toml` for Rust.
+    - Runs `tsc --noEmit --project app/gui/damadian-ui/tsconfig.json` for TypeScript.
 - The Reviewer provides feedback and either approves or requests changes, strictly rejecting mocks and fakes.
 - **Output:** Review results and quality gate report.
 

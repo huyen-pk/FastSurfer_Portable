@@ -51,7 +51,7 @@ echo ""
 echo -e "${YELLOW}[3/3] Running Rust Backend Progress Interception Tests${NC}"
 echo "Command: cargo test progress_ -- --nocapture"
 echo ""
-cd app/gui/desktop/src-tauri
+cd app/gui/workbench/src-tauri
 FASTSURFER_PYTHON_BIN="${FASTSURFER_ENV}/bin/python" cargo test progress_ -- --nocapture || exit 1
 cd "$PROJECT_ROOT"
 
@@ -73,5 +73,5 @@ echo ""
 echo "Next Steps:"
 echo "  1. Review test results above"
 echo "  2. Check test files for implementation details"
-echo "  3. Run TypeScript tests: cd app/gui/simple-viewer && npm test"
+echo "  3. Run TypeScript tests: cd app/gui/damadian-ui && npm test"
 echo ""

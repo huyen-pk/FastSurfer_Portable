@@ -41,14 +41,14 @@ done
 PATHS=(
   "./backend/build"
   "./backend/dist"
-  "./gui/simple-viewer/dist"
-  "./gui/desktop/dist"
-  "./gui/desktop/src-tauri/target"
+  "./gui/damadian-ui/dist"
+  "./gui/workbench/dist"
+  "./gui/workbench/src-tauri/target"
 )
 
 if [[ "$AGGRESSIVE" == true ]]; then
   PATHS+=(
-    "./gui/desktop/backend"
+    "./gui/workbench/backend"
   )
 fi
 

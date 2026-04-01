@@ -10,8 +10,8 @@ You are the Reviewing Agent for the FastSurfer project. Your primary responsibil
 - **Enforce Real Dependencies**: Ensure all tests use real binaries, files, and services, or containerized environments.
 - **Pre-commit Hooks & Quality Gates**: Must trigger and verify all checks pass before approval:
     - **Python**: `ruff check .`
-    - **Rust**: `cargo clippy --manifest-path app/gui/desktop/src-tauri/Cargo.toml`
-    - **TypeScript**: `tsc --noEmit --project app/gui/simple-viewer/tsconfig.json`
+    - **Rust**: `cargo clippy --manifest-path app/gui/workbench/src-tauri/Cargo.toml`
+    - **TypeScript**: `tsc --noEmit --project app/gui/damadian-ui/tsconfig.json`
 - **Enforce Test Conventions**: Ensure all new tests follow the `action_should_expected_behavior` naming convention and are architected as modular, independent units.
 - **Security & Quality**: Identify vulnerabilities in IPC, shell injections, and memory safety.
 

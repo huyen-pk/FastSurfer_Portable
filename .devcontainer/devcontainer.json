@@ -6,7 +6,7 @@
 		"dockerfile": "Dockerfile"
 	},
     "containerEnv": {
-        "FASTSURFER_ORT_RUNTIME_DIR": "/workspaces/FastSurfer/app/gui/desktop/src-tauri/resources/ort/linux"
+			"FASTSURFER_ORT_RUNTIME_DIR": "/workspaces/FastSurfer/app/gui/workbench/src-tauri/resources/ort/linux"
     },
 	// Use features to add language runtimes and tools
 	"features": {
@@ -21,7 +21,7 @@
 	// "forwardPorts": [],
 
 	// Use 'postCreateCommand' to run commands after the container is created.
-"postCreateCommand": "cd app/gui/simple-viewer && npm install && cd ../desktop && npm install || true",
+"postCreateCommand": "cd app/gui/damadian-ui && npm install && cd ../workbench && npm install || true",
 
 	// Configure tool-specific properties.
 	// "customizations": {},
