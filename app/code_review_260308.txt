@@ -26,12 +26,14 @@ files conversion, parity tests):
 => TODO: check if generation functions produce stages output that match Python pipelines.
 => TODO: run_native_inference_with_timeout => check the blocking code that threading is done correctly (replace with tokio?)
 
-- pipeline.rs
+- pipeline module
 => resolve_native_onnx_runtime() use environment variable which requires setting it up when start application, this won't work 
 when bundle up application for user to install.
 => run_forward_and_merge(): change name to run_forward_and_aggregate()
 => run_single_plane_forward_at_slice(): this need to be updated to reflect the batch inference in legacy (set batch=1 for single slice inference)
 => legacy_preprocessing_summary()
+=> NifTi <-> MGZ conversion load python foreign function (nibabel) => implement rust native conversion
+=> 
 
 - preprocessing.rs
 => processes use NifTi format, conversion is done by loading Python binary (nibabel) in run_python_nibabel_convert()
@@ -42,3 +44,8 @@ need to see whether the conversion is needed (use mgh crate) then handle the con
 
 - prediction.rs
 => legacy `run_fastsurfer_inference` removed; use `run_fastsurfer_inference_with_progress` (async)
+
+- transport.rs
+=> circular dependency with backend module: factory.create_fastsurfer_stdio_transport <-> BackendProcess
+=> tests use this method to spawn backend process then call transport via the backend object => need to direct test transport
+=> tests currently all green and backend process spawn correctly but need review after pipeline refactor for dual run

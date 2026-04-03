@@ -50,6 +50,7 @@ LOGGER = logging.getLogger(__name__)
 
 # Conform an MRI brain image to UCHAR, RAS orientation, and 1mm or minimal isotropic
 # voxels
+# This is not relevant to FastSurferCNN, only used in CerebNet
 def load_and_conform_image(
         img_filename: Path | str,
         order: int = 1,
@@ -153,7 +154,7 @@ def load_image(
         raise OSError(f"Failed loading the {name} '{file}' with error: {e.args[0]}") from e
     return img, np.asarray(img.dataobj)
 
-
+# This is not relevant in FastSurferCNN, only used in CerebNet
 def load_maybe_conform(
         file: Path | str,
         alt_file: Path | str,

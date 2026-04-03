@@ -115,3 +115,7 @@ mod transport_tests;
 #[cfg(test)]
 #[path = "../testing/rust/mediator_tests.rs"]
 mod mediator_tests;
+
+#[cfg(test)]
+#[path = "../testing/rust/unit_tests.rs"]
+mod unit_tests;

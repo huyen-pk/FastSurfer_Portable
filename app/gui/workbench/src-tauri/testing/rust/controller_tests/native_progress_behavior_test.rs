@@ -25,8 +25,9 @@ async fn test_native_inference_reports_progress_in_real_time() {
         }
     }
 
-    let input_path = repo_root
-        .join("app/gui/workbench/src-tauri/testing/data/Subject140/140_orig.mgz");
+    let input_path = repo_root.join(
+        "app/gui/workbench/src-tauri/testing/data/Subject140/140_orig.mgz",
+    );
     if !input_path.exists() {
         println!("Skipping test: input file not found");
         return;

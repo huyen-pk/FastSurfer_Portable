@@ -435,8 +435,9 @@ pub(super) fn ensure_native_input_nifti(
         return Ok(input_nii);
     }
 
-    let input_mgz = repo_root
-        .join("app/gui/workbench/src-tauri/testing/data/Subject140/140_orig.mgz");
+    let input_mgz = repo_root.join(
+        "app/gui/workbench/src-tauri/testing/data/Subject140/140_orig.mgz",
+    );
     if !input_mgz.exists() {
         return Err(format!(
             "missing test input file: {}",

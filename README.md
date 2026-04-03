@@ -66,35 +66,6 @@ There are three ways to run FastSurfer (links are to installation instructions):
 
 The images we provide on [DockerHub](https://hub.docker.com/r/deepmi/fastsurfer) conveniently include everything needed for FastSurfer. You will also need a [FreeSurfer license](https://surfer.nmr.mgh.harvard.edu/fswiki/License) file for the [Surface pipeline](#surface-reconstruction). We have detailed per-OS Installation instructions in the [INSTALL.md](doc/overview/INSTALL.md) file.
 
-CI checks
----------
-The repository runs several verification jobs in CI to keep code quality consistent. These are executed on pushes and pull requests and mirror the repository's pre-commit policy.
-
-- **Rust:** runs `cargo fmt -- --check` and `cargo clippy -- -D warnings` in `app/gui/workbench/src-tauri`.
-- **TypeScript / Svelte:** runs `npm ci` and `npx tsc --noEmit` in `app/gui/damadian-ui`.
-- **Anti-mock scan:** fails CI if changed source files contain forbidden mock patterns (e.g. `import .*mock`, `mock(`, `Mocking`).
-- **Test containers check:** any new/changed test file (`*.test.*`, names containing `test`) should reference `testcontainers`, `docker`, or `container`.
-
-Run these checks locally before pushing:
-
-```bash
-# Rust (from repo root)
-cd app/gui/workbench/src-tauri
-cargo fmt -- --check
-cargo clippy -- -D warnings
-
-# TypeScript (from repo root)
-cd app/gui/damadian-ui
-npm ci
-npx tsc --noEmit
-
-# Anti-mock (quick grep over changed files)
-git diff --name-only origin/main...HEAD | xargs -r -n1 grep -Ei "import.*mock|from.*mock|use.*mock|mock!|mock\(|Mocking"
-
-# Test container check (simple grep)
-git diff --name-only origin/main...HEAD | xargs -r -n1 grep -Ei "test.*\.(ts|rs|py)|test" | xargs -r -n1 grep -Ei "testcontainers|docker|container" || echo "Run CI to get automated check"
-```
-
 ### Usage
 All installation methods use the `run_fastsurfer.sh` call interface (replace the placeholder `<*fastsurfer-flags*>` with [FastSurfer flags](doc/scripts/RUN_FASTSURFER.md#required-arguments)), which is the general starting point for FastSurfer. However, there are different ways to call this script depending on the installation, which we explain here:
 
